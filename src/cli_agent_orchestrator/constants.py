@@ -106,6 +106,16 @@ PYTE_QUIESCENCE_DELAY_S = 0.2
 MAX_CONCURRENT_WORKERS = int(os.environ.get("CAO_MAX_CONCURRENT_WORKERS", "16"))
 MAX_WORKERS_PER_SESSION = int(os.environ.get("CAO_MAX_WORKERS_PER_SESSION", "8"))
 
+# Per-worker git worktree isolation. When enabled, a worker created in a git
+# repository working directory gets its OWN worktree + branch
+# (cao/<profile>-<terminal_id>) under WORKTREES_DIR instead of sharing the
+# checkout — two parallel workers can never collide on files. Worktrees are
+# removed at terminal deletion; branches are kept (unmerged work survives).
+# kimi_cli is excluded (it runs inside its own temp dir, not the working
+# directory). Off by default until the orchestration driver adopts it.
+ENABLE_GIT_WORKTREE = os.environ.get("CAO_ENABLE_GIT_WORKTREE", "false").lower() == "true"
+WORKTREES_DIR = CAO_HOME_DIR / "worktrees"
+
 # Event-driven status wait (GET /terminals/{id}/wait). The long-poll holds a
 # coroutine + an event-bus subscription per caller, so the timeout is capped to
 # keep a buggy/hostile caller from pinning server resources indefinitely.

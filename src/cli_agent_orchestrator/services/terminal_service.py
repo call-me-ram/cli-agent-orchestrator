@@ -37,6 +37,7 @@ from cli_agent_orchestrator.clients.database import (
     update_terminal_shell_command,
 )
 from cli_agent_orchestrator.constants import (
+    ENABLE_GIT_WORKTREE,
     FIFO_DIR,
     MAX_CONCURRENT_WORKERS,
     MAX_WORKERS_PER_SESSION,
@@ -53,6 +54,7 @@ from cli_agent_orchestrator.plugins import (
     PostSendMessageEvent,
 )
 from cli_agent_orchestrator.providers.manager import provider_manager
+from cli_agent_orchestrator.services import git_worktree_service
 from cli_agent_orchestrator.services.fifo_reader import fifo_manager
 from cli_agent_orchestrator.services.herdr_inbox_registry import get_herdr_inbox_service
 from cli_agent_orchestrator.services.memory_service import MemoryService
@@ -277,6 +279,36 @@ async def create_terminal(
             # resource is created so a rejection has nothing to clean up.
             if agent_profile != "memory_manager":
                 await asyncio.to_thread(_enforce_worker_cap, session_name)
+
+            # Git worktree isolation: give this worker its own worktree +
+            # branch instead of sharing the supervisor's checkout, so
+            # parallel workers can never collide on files. Best-effort —
+            # any failure falls back to the shared directory. kimi_cli is
+            # excluded (it runs inside its own temp dir, not the cwd).
+            if (
+                ENABLE_GIT_WORKTREE
+                and working_directory
+                and agent_profile != "memory_manager"
+                and provider != ProviderType.KIMI_CLI.value
+            ):
+                try:
+                    if await asyncio.to_thread(git_worktree_service.is_git_repo, working_directory):
+                        worktree_path, branch = await asyncio.to_thread(
+                            git_worktree_service.create_worktree,
+                            working_directory,
+                            terminal_id,
+                            agent_profile,
+                        )
+                        logger.info(
+                            f"Worker {terminal_id} isolated in worktree {worktree_path} "
+                            f"(branch {branch})"
+                        )
+                        working_directory = worktree_path
+                except Exception as e:
+                    logger.warning(
+                        f"Worktree provisioning failed for {terminal_id}; "
+                        f"falling back to shared directory {working_directory}: {e}"
+                    )
             window_name = get_backend().create_window(
                 session_name,
                 window_name,
@@ -844,6 +876,13 @@ def get_output(terminal_id: str, mode: OutputMode = OutputMode.FULL) -> str:
 def delete_terminal(terminal_id: str, registry: PluginRegistry | None = None) -> bool:
     """Delete terminal and kill its tmux window."""
     try:
+        # Remove the worker's isolated git worktree if one was provisioned.
+        # Best-effort, and the branch is kept — unmerged work survives.
+        try:
+            git_worktree_service.remove_worktree(terminal_id)
+        except Exception as e:
+            logger.warning(f"Worktree cleanup failed for {terminal_id}: {e}")
+
         # Unregister from herdr inbox service
         svc = get_herdr_inbox_service()
         if svc:
