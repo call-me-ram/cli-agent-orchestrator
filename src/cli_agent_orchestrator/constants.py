@@ -97,6 +97,17 @@ PYTE_SCREEN_ROWS = 50
 # per-chunk rendered detection produces (measured worse than the raw path).
 PYTE_QUIESCENCE_DELAY_S = 0.2
 
+# Event-driven status wait (GET /terminals/{id}/wait). The long-poll holds a
+# coroutine + an event-bus subscription per caller, so the timeout is capped to
+# keep a buggy/hostile caller from pinning server resources indefinitely.
+WAIT_STATUS_DEFAULT_TIMEOUT = 600.0
+WAIT_STATUS_MAX_TIMEOUT = 3600.0
+
+# SSE status stream (GET /events): heartbeat interval in seconds. Keeps
+# proxies/load-balancers from closing an idle stream and lets sse-starlette
+# notice client disconnects promptly.
+SSE_HEARTBEAT_INTERVAL = 15
+
 # Eager inbox delivery: when enabled, deliver queued messages to terminals in
 # PROCESSING state for providers that declare
 # accepts_input_while_processing=True. Eliminates latency between agent turns

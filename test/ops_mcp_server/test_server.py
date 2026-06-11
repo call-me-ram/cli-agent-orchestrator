@@ -26,6 +26,7 @@ from cli_agent_orchestrator.ops_mcp_server.server import (
     main,
     send_session_message,
     shutdown_session,
+    wait_for_terminal_status,
 )
 
 
@@ -617,6 +618,63 @@ class TestTerminalMonitoringTools:
         assert result == {
             "success": False,
             "message": "Get terminal output for 'term-123' failed: api offline",
+        }
+
+    async def test_wait_for_terminal_status_blocks_on_wait_endpoint(self) -> None:
+        """The wait tool long-polls /wait with the target statuses and an
+        HTTP read timeout that outlives the server-side wait."""
+        payload = {
+            "terminal_id": "term-123",
+            "reached": True,
+            "timed_out": False,
+            "status": "completed",
+        }
+        with patch(
+            "cli_agent_orchestrator.ops_mcp_server.server.requests.request",
+            return_value=_response(json_data=payload),
+        ) as mock_request:
+            result = await wait_for_terminal_status(
+                terminal_id="term-123", target_statuses=["completed"], timeout=120.0
+            )
+
+        assert result == payload
+        mock_request.assert_called_once_with(
+            "get",
+            "http://127.0.0.1:9889/terminals/term-123/wait",
+            params={"status": ["completed"], "timeout": 120.0},
+            json=None,
+            timeout=(5.0, 150.0),
+        )
+
+    async def test_wait_for_terminal_status_defaults_to_completed_and_error(self) -> None:
+        """With no explicit targets, the tool waits for completed/error."""
+        payload = {
+            "terminal_id": "term-123",
+            "reached": False,
+            "timed_out": True,
+            "status": "processing",
+        }
+        with patch(
+            "cli_agent_orchestrator.ops_mcp_server.server.requests.request",
+            return_value=_response(json_data=payload),
+        ) as mock_request:
+            result = await wait_for_terminal_status(terminal_id="term-123")
+
+        assert result["timed_out"] is True
+        assert mock_request.call_args.kwargs["params"]["status"] == ["completed", "error"]
+        assert mock_request.call_args.kwargs["timeout"] == (5.0, 630.0)
+
+    async def test_wait_for_terminal_status_returns_failure_for_not_found(self) -> None:
+        """A 404 surfaces as a failure dict, not an exception."""
+        with patch(
+            "cli_agent_orchestrator.ops_mcp_server.server.requests.request",
+            return_value=_response(status_code=404, json_data={"detail": "Terminal not found"}),
+        ):
+            result = await wait_for_terminal_status(terminal_id="missing")
+
+        assert result == {
+            "success": False,
+            "message": "Wait for terminal status on 'missing' failed: Terminal not found",
         }
 
 

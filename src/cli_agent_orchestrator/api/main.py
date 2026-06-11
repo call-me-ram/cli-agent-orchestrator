@@ -29,6 +29,7 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field, field_validator
+from sse_starlette.sse import EventSourceResponse
 
 from cli_agent_orchestrator.backends import TerminalNotFoundError
 from cli_agent_orchestrator.backends.herdr_backend import HerdrBackend
@@ -49,12 +50,15 @@ from cli_agent_orchestrator.constants import (
     SERVER_HOST,
     SERVER_PORT,
     SERVER_VERSION,
+    SSE_HEARTBEAT_INTERVAL,
+    WAIT_STATUS_DEFAULT_TIMEOUT,
+    WAIT_STATUS_MAX_TIMEOUT,
     WS_ALLOWED_CLIENTS,
     add_local_cors_origins,
 )
 from cli_agent_orchestrator.models.flow import Flow
 from cli_agent_orchestrator.models.inbox import MessageStatus, OrchestrationType
-from cli_agent_orchestrator.models.terminal import Terminal, TerminalId
+from cli_agent_orchestrator.models.terminal import Terminal, TerminalId, TerminalStatus
 from cli_agent_orchestrator.plugins import PluginRegistry
 from cli_agent_orchestrator.providers.manager import provider_manager
 from cli_agent_orchestrator.services import (
@@ -75,13 +79,14 @@ from cli_agent_orchestrator.services.log_writer import log_writer
 from cli_agent_orchestrator.services.status_monitor import status_monitor
 from cli_agent_orchestrator.services.terminal_service import OutputMode, TerminalInputBlockedError
 from cli_agent_orchestrator.utils.agent_profiles import load_agent_profile, resolve_provider
+from cli_agent_orchestrator.utils.event import terminal_id_from_topic
 from cli_agent_orchestrator.utils.logging import setup_logging
 from cli_agent_orchestrator.utils.skills import (
     SkillNameError,
     load_skill_content,
     validate_skill_name,
 )
-from cli_agent_orchestrator.utils.terminal import validate_tmux_name
+from cli_agent_orchestrator.utils.terminal import validate_tmux_name, wait_until_status_event
 
 logger = logging.getLogger(__name__)
 
@@ -821,6 +826,103 @@ async def get_terminal_output(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get output: {str(e)}",
         )
+
+
+@app.get("/terminals/{terminal_id}/wait")
+async def wait_terminal_status(
+    request: Request,
+    terminal_id: TerminalId,
+    target: Annotated[List[str], Query(alias="status", min_length=1)],
+    timeout: Annotated[
+        float, Query(gt=0, le=WAIT_STATUS_MAX_TIMEOUT)
+    ] = WAIT_STATUS_DEFAULT_TIMEOUT,
+) -> Dict:
+    """Block until the terminal reaches one of the target statuses (long-poll).
+
+    Event-driven: the request parks on the event bus and returns the instant
+    StatusMonitor publishes a matching transition — no client-visible polling.
+    Quiet laps re-snapshot the status (covers event-inbox backends like herdr,
+    which never publish status events) and watch for client disconnect so an
+    abandoned wait releases its subscription promptly. A timeout is a normal
+    long-poll outcome, returned as 200 with ``reached: false``; 4xx is
+    reserved for bad input / unknown terminal.
+    """
+    try:
+        terminal_service.get_terminal(terminal_id)
+    except (ValueError, TerminalNotFoundError) as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+    try:
+        targets = {TerminalStatus(value.lower()) for value in target}
+    except ValueError:
+        allowed = ", ".join(s.value for s in TerminalStatus)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid status filter; allowed values: {allowed}",
+        )
+
+    reached = await wait_until_status_event(
+        terminal_id, targets, timeout=timeout, should_abort=request.is_disconnected
+    )
+    return {
+        "terminal_id": terminal_id,
+        "reached": reached,
+        "timed_out": not reached,
+        "status": (await asyncio.to_thread(status_monitor.get_status, terminal_id)).value,
+    }
+
+
+async def _status_event_stream():
+    """Yield one SSE ``status`` event per published terminal status change.
+
+    The ``finally`` unsubscribe is mandatory: without it a disconnected client
+    leaves a dead queue that the dispatcher keeps filling until QueueFull spam.
+    sse-starlette cancels this generator when the client goes away, which
+    routes through the ``finally``.
+    """
+    queue = bus.subscribe("terminal.*.status")
+    try:
+        while True:
+            event = await queue.get()
+            yield {
+                "event": "status",
+                "data": json.dumps(
+                    {
+                        "terminal_id": terminal_id_from_topic(event["topic"]),
+                        "status": event["data"].get("status"),
+                    }
+                ),
+            }
+    finally:
+        bus.unsubscribe("terminal.*.status", queue)
+
+
+@app.get("/events")
+async def status_events(request: Request) -> EventSourceResponse:
+    """Server-Sent Events stream of terminal status changes.
+
+    Pushes one ``status`` event per StatusMonitor transition (any terminal),
+    so consumers (web UI, dashboards) get live updates without polling.
+    sse-starlette handles heartbeats and client-disconnect cancellation;
+    ``send_timeout`` tears down stalled (zero-window) clients so they cannot
+    hold a dead subscription that the dispatcher fills to QueueFull.
+
+    Contract: the stream is deltas-only and lossy on reconnect — consumers
+    must fetch current terminal state via REST on every (re)connect and treat
+    this stream purely as a change signal. Event-inbox backends (herdr) never
+    publish status events, so the stream is silent for their terminals.
+    """
+    # Same client gating as the terminal WebSocket: this stream exposes every
+    # terminal's live status, so restrict it to the same allowlist.
+    client_host = request.client.host if request.client else None
+    if client_host is not None and client_host not in WS_ALLOWED_CLIENTS:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Event stream access is restricted to allowed clients",
+        )
+    return EventSourceResponse(
+        _status_event_stream(), ping=SSE_HEARTBEAT_INTERVAL, send_timeout=30.0
+    )
 
 
 @app.post("/terminals/{terminal_id}/exit")

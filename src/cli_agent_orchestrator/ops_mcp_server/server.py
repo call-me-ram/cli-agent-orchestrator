@@ -1,5 +1,7 @@
 """CAO operations MCP server implementation."""
 
+import asyncio
+import functools
 from typing import Annotated, Any, Dict, List, Optional
 
 import requests  # type: ignore[import-untyped]
@@ -32,7 +34,8 @@ mcp = FastMCP(
     3. install_profile to install a profile for a target provider
     4. launch_session to start a new CAO session
     5. send_session_message to deliver a prompt to a running terminal
-    6. get_terminal_status to poll a worker until it finishes a task
+    6. wait_for_terminal_status to block until a worker finishes (event-driven;
+       prefer this over polling get_terminal_status, which is for one-shot checks)
     7. get_terminal_output to read a worker's result (or review its files/git diff)
     8. get_session_info or list_sessions to monitor overall progress
     9. shutdown_session to clean up when done
@@ -64,14 +67,26 @@ def _request_json(
     params: Optional[Dict[str, Any]] = None,
     json: Optional[Any] = None,
     operation: str,
+    timeout: Optional[tuple[float, float]] = None,
 ) -> tuple[Optional[Any], Optional[str]]:
-    """Execute an API request and return either JSON data or an error message."""
+    """Execute an API request and return either JSON data or an error message.
+
+    ``timeout`` is a requests-style ``(connect, read)`` tuple. Long-poll
+    callers (wait_for_terminal_status) must set the read timeout LONGER than
+    the server-side wait so the client socket outlives the long-poll, while
+    the short connect timeout makes an unreachable server fail in seconds.
+    NOTE: this function blocks the calling thread for up to the read timeout —
+    async tools must run it via ``asyncio.to_thread`` so the MCP server's
+    event loop stays responsive (pings, cancellation, parallel tool calls).
+    """
+    request_kwargs: Dict[str, Any] = {"params": params, "json": json}
+    if timeout is not None:
+        request_kwargs["timeout"] = timeout
     try:
         response = requests.request(
             method,
             f"{API_BASE_URL}{path}",
-            params=params,
-            json=json,
+            **request_kwargs,
         )
     except requests.RequestException as exc:
         return None, f"{operation} failed: {exc}"
@@ -353,6 +368,75 @@ async def get_terminal_status(
     if isinstance(data, dict):
         return data
     return {"success": False, "message": "Get terminal status failed: invalid response payload"}
+
+
+@mcp.tool()
+async def wait_for_terminal_status(
+    terminal_id: Annotated[str, Field(description="The terminal ID to wait on")],
+    target_statuses: Annotated[
+        Optional[List[str]],
+        Field(
+            description=(
+                "Statuses that complete the wait, any of: idle, processing, "
+                "completed, waiting_user_answer, error. Default: completed + error."
+            )
+        ),
+    ] = None,
+    timeout: Annotated[
+        float,
+        Field(
+            description=(
+                "Max seconds to block server-side (<=3600). Keep BELOW your MCP "
+                "client's per-tool-call timeout; for very long tasks call this "
+                "repeatedly with a bounded timeout (e.g. 120) — each call is "
+                "still event-driven, not a poll."
+            ),
+            gt=0,
+            le=3600,
+        ),
+    ] = 600.0,
+) -> JsonDict:
+    """Block until a worker terminal reaches a target status (event-driven).
+
+    Use this INSTEAD of looping get_terminal_status: the CAO server parks the
+    request on its internal event bus and responds the instant the worker's
+    status changes — zero polling, zero missed-transition latency. A timeout
+    is a normal outcome (``reached: false, timed_out: true``), not an error;
+    re-invoke to keep waiting.
+
+    Prefer STICKY targets (completed, error — the defaults). Transient
+    statuses make unreliable targets: 'processing' may be over before the
+    wait starts, and a finished worker latches 'completed', so a bare
+    ['idle'] wait can stall — if you wait for readiness, use
+    ['idle', 'completed'].
+
+    Args:
+        terminal_id: Target terminal ID (from launch_session or get_session_info)
+        target_statuses: Statuses to wait for (default: ["completed", "error"])
+        timeout: Max seconds to block server-side
+
+    Returns:
+        Dict with terminal_id, reached (bool), timed_out (bool), and status
+        (the terminal's status at return) — or {"success": False, ...} on error
+    """
+    statuses = target_statuses or ["completed", "error"]
+    # to_thread: the sync HTTP call would otherwise pin the MCP event loop
+    # for the whole long-poll, freezing pings/cancellation/parallel tools.
+    data, error = await asyncio.to_thread(
+        functools.partial(
+            _request_json,
+            "get",
+            f"/terminals/{terminal_id}/wait",
+            params={"status": statuses, "timeout": timeout},
+            operation=f"Wait for terminal status on '{terminal_id}'",
+            timeout=(5.0, timeout + 30.0),
+        )
+    )
+    if error:
+        return {"success": False, "message": error}
+    if isinstance(data, dict):
+        return data
+    return {"success": False, "message": "Wait for terminal status failed: invalid response"}
 
 
 @mcp.tool()

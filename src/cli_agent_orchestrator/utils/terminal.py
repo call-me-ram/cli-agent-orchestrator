@@ -5,7 +5,7 @@ import logging
 import re
 import time
 import uuid
-from typing import Union
+from typing import Awaitable, Callable, Union
 
 import requests
 
@@ -186,6 +186,88 @@ async def wait_until_status(
         await asyncio.sleep(polling_interval)
     logger.warning(f"wait_until_status [{terminal_id}]: timeout waiting for {{{target_str}}}")
     return False
+
+
+async def wait_until_status_event(
+    terminal_id: str,
+    target_status: "TerminalStatus | set[TerminalStatus]",
+    timeout: float = 600.0,
+    snapshot_interval: float = 5.0,
+    should_abort: "Callable[[], Awaitable[bool]] | None" = None,
+) -> bool:
+    """Wait until terminal reaches target status by blocking on the event bus.
+
+    Event-driven sibling of wait_until_status: instead of polling, it
+    subscribes to ``terminal.{id}.status`` and wakes the instant StatusMonitor
+    publishes a matching transition. Use this for long waits (orchestration
+    drivers, the /terminals/{id}/wait endpoint) where a 1s poll loop would
+    burn cycles and add latency.
+
+    Ordering matters: subscribe FIRST, then snapshot the current status.
+    StatusMonitor only publishes on a CHANGE and latches sticky-ready
+    statuses, so a terminal already in a target state may never re-emit — the
+    snapshot closes that race, and any transition that lands between subscribe
+    and snapshot is captured in the queue.
+
+    The wait runs in bounded laps (``snapshot_interval``) rather than one
+    long ``queue.get()``. Each quiet lap re-snapshots ``get_status`` (in a
+    worker thread — on event-inbox backends like herdr it shells out and no
+    status event is ever published, so the snapshot is the ONLY way the wait
+    can resolve there) and consults ``should_abort`` (e.g. client
+    disconnected) so abandoned waits release their subscription promptly
+    instead of holding it for the full timeout. Events still resolve the wait
+    instantly — the laps only bound how long a *quiet* wait goes between
+    snapshot/abort checks.
+    """
+    from cli_agent_orchestrator.services.event_bus import bus
+    from cli_agent_orchestrator.services.status_monitor import status_monitor
+
+    targets = target_status if isinstance(target_status, set) else {target_status}
+    target_values = {s.value for s in targets}
+    target_str = ", ".join(sorted(target_values))
+    topic = f"terminal.{terminal_id}.status"
+
+    queue = bus.subscribe(topic)
+    try:
+        if await asyncio.to_thread(status_monitor.get_status, terminal_id) in targets:
+            logger.info(f"wait_until_status_event [{terminal_id}]: already in {{{target_str}}}")
+            return True
+
+        logger.info(
+            f"wait_until_status_event [{terminal_id}]: waiting for {{{target_str}}}, "
+            f"timeout={timeout}s"
+        )
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            try:
+                event = await asyncio.wait_for(
+                    queue.get(), timeout=min(remaining, snapshot_interval)
+                )
+            except asyncio.TimeoutError:
+                if should_abort is not None and await should_abort():
+                    logger.info(f"wait_until_status_event [{terminal_id}]: caller gone, aborting")
+                    return False
+                if await asyncio.to_thread(status_monitor.get_status, terminal_id) in targets:
+                    logger.info(
+                        f"wait_until_status_event [{terminal_id}]: reached target (snapshot)"
+                    )
+                    return True
+                continue
+            if event["data"].get("status") in target_values:
+                logger.info(
+                    f"wait_until_status_event [{terminal_id}]: reached "
+                    f"{event['data']['status']}"
+                )
+                return True
+        logger.warning(
+            f"wait_until_status_event [{terminal_id}]: timeout waiting for {{{target_str}}}"
+        )
+        return False
+    finally:
+        bus.unsubscribe(topic, queue)
 
 
 def poll_until_done(terminal_id: str, timeout: float, polling_interval: float = 1.0) -> None:
