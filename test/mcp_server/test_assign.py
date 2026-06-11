@@ -1,5 +1,6 @@
 """Tests for assign MCP tool."""
 
+import asyncio
 import os
 from unittest.mock import MagicMock, patch
 
@@ -102,7 +103,10 @@ class TestAssignSenderIdInjection:
 
     @patch("cli_agent_orchestrator.mcp_server.server.ENABLE_SENDER_ID_INJECTION", True)
     @patch("cli_agent_orchestrator.mcp_server.server._send_direct_input")
-    @patch("cli_agent_orchestrator.mcp_server.server.wait_until_terminal_status", return_value=True)
+    @patch(
+        "cli_agent_orchestrator.mcp_server.server._wait_for_status_via_api",
+        return_value=(True, "idle"),
+    )
     @patch("cli_agent_orchestrator.mcp_server.server._create_terminal")
     def test_assign_appends_sender_id_when_injection_enabled(
         self, mock_create, mock_wait, mock_send
@@ -114,7 +118,7 @@ class TestAssignSenderIdInjection:
         mock_send.return_value = None
 
         with patch.dict(os.environ, {"CAO_TERMINAL_ID": "supervisor-abc123"}):
-            result = _assign_impl("developer", "Analyze the logs")
+            result = asyncio.run(_assign_impl("developer", "Analyze the logs"))
 
         assert result["success"] is True
         sent_message = mock_send.call_args[0][1]
@@ -125,7 +129,10 @@ class TestAssignSenderIdInjection:
 
     @patch("cli_agent_orchestrator.mcp_server.server.ENABLE_SENDER_ID_INJECTION", False)
     @patch("cli_agent_orchestrator.mcp_server.server._send_direct_input")
-    @patch("cli_agent_orchestrator.mcp_server.server.wait_until_terminal_status", return_value=True)
+    @patch(
+        "cli_agent_orchestrator.mcp_server.server._wait_for_status_via_api",
+        return_value=(True, "idle"),
+    )
     @patch("cli_agent_orchestrator.mcp_server.server._create_terminal")
     def test_assign_no_suffix_when_injection_disabled(self, mock_create, mock_wait, mock_send):
         """When injection is disabled, assign should send the message unchanged."""
@@ -135,7 +142,7 @@ class TestAssignSenderIdInjection:
         mock_send.return_value = None
 
         with patch.dict(os.environ, {"CAO_TERMINAL_ID": "supervisor-abc123"}):
-            result = _assign_impl("developer", "Analyze the logs")
+            result = asyncio.run(_assign_impl("developer", "Analyze the logs"))
 
         assert result["success"] is True
         sent_message = mock_send.call_args[0][1]
@@ -144,7 +151,10 @@ class TestAssignSenderIdInjection:
 
     @patch("cli_agent_orchestrator.mcp_server.server.ENABLE_SENDER_ID_INJECTION", True)
     @patch("cli_agent_orchestrator.mcp_server.server._send_direct_input")
-    @patch("cli_agent_orchestrator.mcp_server.server.wait_until_terminal_status", return_value=True)
+    @patch(
+        "cli_agent_orchestrator.mcp_server.server._wait_for_status_via_api",
+        return_value=(True, "idle"),
+    )
     @patch("cli_agent_orchestrator.mcp_server.server._create_terminal")
     def test_assign_sender_id_fallback_unknown(self, mock_create, mock_wait, mock_send):
         """When CAO_TERMINAL_ID is not set, suffix should use 'unknown'."""
@@ -154,7 +164,7 @@ class TestAssignSenderIdInjection:
         mock_send.return_value = None
 
         with patch.dict(os.environ, {}, clear=True):
-            result = _assign_impl("developer", "Build feature X")
+            result = asyncio.run(_assign_impl("developer", "Build feature X"))
 
         sent_message = mock_send.call_args[0][1]
         assert mock_send.call_args[0][2] == "assign"
@@ -162,7 +172,10 @@ class TestAssignSenderIdInjection:
 
     @patch("cli_agent_orchestrator.mcp_server.server.ENABLE_SENDER_ID_INJECTION", True)
     @patch("cli_agent_orchestrator.mcp_server.server._send_direct_input")
-    @patch("cli_agent_orchestrator.mcp_server.server.wait_until_terminal_status", return_value=True)
+    @patch(
+        "cli_agent_orchestrator.mcp_server.server._wait_for_status_via_api",
+        return_value=(True, "idle"),
+    )
     @patch("cli_agent_orchestrator.mcp_server.server._create_terminal")
     def test_assign_suffix_is_appended_not_prepended(self, mock_create, mock_wait, mock_send):
         """The sender ID should be a suffix, not a prefix."""
@@ -173,7 +186,7 @@ class TestAssignSenderIdInjection:
         original = "Do the task described in /path/to/task.md"
 
         with patch.dict(os.environ, {"CAO_TERMINAL_ID": "sup-111"}):
-            _assign_impl("developer", original)
+            asyncio.run(_assign_impl("developer", original))
 
         sent_message = mock_send.call_args[0][1]
         assert mock_send.call_args[0][2] == "assign"

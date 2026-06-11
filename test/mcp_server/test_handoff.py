@@ -13,13 +13,13 @@ class TestHandoffMessageContext:
     """Tests for handoff message context prepended to worker agents."""
 
     @patch("cli_agent_orchestrator.mcp_server.server._send_direct_input")
-    @patch("cli_agent_orchestrator.mcp_server.server.wait_until_terminal_status")
+    @patch("cli_agent_orchestrator.mcp_server.server._wait_for_status_via_api")
     @patch("cli_agent_orchestrator.mcp_server.server._create_terminal")
     def test_codex_provider_prepends_handoff_context(self, mock_create, mock_wait, mock_send):
         """Codex provider should prepend [CAO Handoff] with supervisor ID."""
         mock_create.return_value = ("dev-terminal-1", "codex")
         # First call: wait for IDLE (True), second call: wait for COMPLETED (True)
-        mock_wait.side_effect = [True, True]
+        mock_wait.side_effect = [(True, "idle"), (True, "completed")]
         mock_send.return_value = None
 
         with patch.dict(os.environ, {"CAO_TERMINAL_ID": "supervisor-abc123"}):
@@ -42,12 +42,12 @@ class TestHandoffMessageContext:
         assert "Do NOT use send_message" in sent_message
 
     @patch("cli_agent_orchestrator.mcp_server.server._send_direct_input")
-    @patch("cli_agent_orchestrator.mcp_server.server.wait_until_terminal_status")
+    @patch("cli_agent_orchestrator.mcp_server.server._wait_for_status_via_api")
     @patch("cli_agent_orchestrator.mcp_server.server._create_terminal")
     def test_claude_code_provider_no_handoff_context(self, mock_create, mock_wait, mock_send):
         """Claude Code provider should NOT prepend any handoff context."""
         mock_create.return_value = ("dev-terminal-2", "claude_code")
-        mock_wait.side_effect = [True, True]
+        mock_wait.side_effect = [(True, "idle"), (True, "completed")]
         mock_send.return_value = None
 
         with patch("cli_agent_orchestrator.mcp_server.server.requests") as mock_requests:
@@ -66,12 +66,12 @@ class TestHandoffMessageContext:
         assert sent_message == "Implement hello world"
 
     @patch("cli_agent_orchestrator.mcp_server.server._send_direct_input")
-    @patch("cli_agent_orchestrator.mcp_server.server.wait_until_terminal_status")
+    @patch("cli_agent_orchestrator.mcp_server.server._wait_for_status_via_api")
     @patch("cli_agent_orchestrator.mcp_server.server._create_terminal")
     def test_kiro_cli_provider_no_handoff_context(self, mock_create, mock_wait, mock_send):
         """Kiro CLI provider should NOT prepend any handoff context."""
         mock_create.return_value = ("dev-terminal-3", "kiro_cli")
-        mock_wait.side_effect = [True, True]
+        mock_wait.side_effect = [(True, "idle"), (True, "completed")]
         mock_send.return_value = None
 
         with patch("cli_agent_orchestrator.mcp_server.server.requests") as mock_requests:
@@ -89,14 +89,14 @@ class TestHandoffMessageContext:
         assert sent_message == "Implement hello world"
 
     @patch("cli_agent_orchestrator.mcp_server.server._send_direct_input")
-    @patch("cli_agent_orchestrator.mcp_server.server.wait_until_terminal_status")
+    @patch("cli_agent_orchestrator.mcp_server.server._wait_for_status_via_api")
     @patch("cli_agent_orchestrator.mcp_server.server._create_terminal")
     def test_codex_handoff_context_includes_supervisor_id_from_env(
         self, mock_create, mock_wait, mock_send
     ):
         """Supervisor terminal ID should come from CAO_TERMINAL_ID env var."""
         mock_create.return_value = ("dev-terminal-4", "codex")
-        mock_wait.side_effect = [True, True]
+        mock_wait.side_effect = [(True, "idle"), (True, "completed")]
         mock_send.return_value = None
 
         with patch.dict(os.environ, {"CAO_TERMINAL_ID": "sup-xyz789"}):
@@ -115,12 +115,12 @@ class TestHandoffMessageContext:
         assert "Build feature X" in sent_message
 
     @patch("cli_agent_orchestrator.mcp_server.server._send_direct_input")
-    @patch("cli_agent_orchestrator.mcp_server.server.wait_until_terminal_status")
+    @patch("cli_agent_orchestrator.mcp_server.server._wait_for_status_via_api")
     @patch("cli_agent_orchestrator.mcp_server.server._create_terminal")
     def test_codex_handoff_context_fallback_when_no_env(self, mock_create, mock_wait, mock_send):
         """When CAO_TERMINAL_ID is not set, supervisor ID should be 'unknown'."""
         mock_create.return_value = ("dev-terminal-5", "codex")
-        mock_wait.side_effect = [True, True]
+        mock_wait.side_effect = [(True, "idle"), (True, "completed")]
         mock_send.return_value = None
 
         with patch.dict(os.environ, {}, clear=True):
@@ -140,12 +140,12 @@ class TestHandoffMessageContext:
         assert "Do task" in sent_message
 
     @patch("cli_agent_orchestrator.mcp_server.server._send_direct_input")
-    @patch("cli_agent_orchestrator.mcp_server.server.wait_until_terminal_status")
+    @patch("cli_agent_orchestrator.mcp_server.server._wait_for_status_via_api")
     @patch("cli_agent_orchestrator.mcp_server.server._create_terminal")
     def test_codex_handoff_original_message_preserved(self, mock_create, mock_wait, mock_send):
         """Original message should appear in full after the handoff prefix."""
         mock_create.return_value = ("dev-terminal-6", "codex")
-        mock_wait.side_effect = [True, True]
+        mock_wait.side_effect = [(True, "idle"), (True, "completed")]
         mock_send.return_value = None
 
         original = "Implement the task described in /path/to/task.md. Write tests."
@@ -168,12 +168,12 @@ class TestHandoffAutoDelete:
     """Tests for auto-deletion of handoff terminals on success."""
 
     @patch("cli_agent_orchestrator.mcp_server.server._send_direct_input")
-    @patch("cli_agent_orchestrator.mcp_server.server.wait_until_terminal_status")
+    @patch("cli_agent_orchestrator.mcp_server.server._wait_for_status_via_api")
     @patch("cli_agent_orchestrator.mcp_server.server._create_terminal")
     def test_auto_deletes_terminal_on_success(self, mock_create, mock_wait, mock_send):
         """Handoff terminal is deleted via DELETE /terminals/{id} on success."""
         mock_create.return_value = ("dev-t1", "kiro_cli")
-        mock_wait.side_effect = [True, True]
+        mock_wait.side_effect = [(True, "idle"), (True, "completed")]
         mock_send.return_value = None
 
         with patch("cli_agent_orchestrator.mcp_server.server.requests") as mock_requests:
@@ -193,12 +193,12 @@ class TestHandoffAutoDelete:
             assert "dev-t1" in call_url
 
     @patch("cli_agent_orchestrator.mcp_server.server._send_direct_input")
-    @patch("cli_agent_orchestrator.mcp_server.server.wait_until_terminal_status")
+    @patch("cli_agent_orchestrator.mcp_server.server._wait_for_status_via_api")
     @patch("cli_agent_orchestrator.mcp_server.server._create_terminal")
     def test_auto_delete_failure_does_not_raise(self, mock_create, mock_wait, mock_send):
         """Auto-delete failure is logged but does not fail the handoff result."""
         mock_create.return_value = ("dev-t1", "kiro_cli")
-        mock_wait.side_effect = [True, True]
+        mock_wait.side_effect = [(True, "idle"), (True, "completed")]
         mock_send.return_value = None
 
         with patch("cli_agent_orchestrator.mcp_server.server.requests") as mock_requests:
@@ -214,3 +214,74 @@ class TestHandoffAutoDelete:
             result = asyncio.run(_handoff_impl("developer", "Do task"))
 
         assert result.success is True
+
+
+class TestHandoffRecovery:
+    """Timeout/ERROR recovery: ERROR is terminal, timeouts interrupt the worker."""
+
+    @patch("cli_agent_orchestrator.mcp_server.server._fetch_output_best_effort")
+    @patch("cli_agent_orchestrator.mcp_server.server._send_direct_input")
+    @patch("cli_agent_orchestrator.mcp_server.server._wait_for_status_via_api")
+    @patch("cli_agent_orchestrator.mcp_server.server._create_terminal")
+    def test_error_during_init_fails_fast(self, mock_create, mock_wait, mock_send, mock_output):
+        """A worker that errors during startup fails immediately, no task sent."""
+        mock_create.return_value = ("dev-t1", "claude_code")
+        mock_wait.side_effect = [(True, "error")]
+        mock_output.return_value = "API key invalid"
+
+        result = asyncio.run(_handoff_impl("developer", "Do task"))
+
+        assert result.success is False
+        assert "ERROR during initialization" in result.message
+        mock_send.assert_not_called()
+
+    @patch("cli_agent_orchestrator.mcp_server.server._fetch_result_best_effort")
+    @patch("cli_agent_orchestrator.mcp_server.server._fetch_output_best_effort")
+    @patch("cli_agent_orchestrator.mcp_server.server._interrupt_terminal")
+    @patch("cli_agent_orchestrator.mcp_server.server._send_direct_input")
+    @patch("cli_agent_orchestrator.mcp_server.server._wait_for_status_via_api")
+    @patch("cli_agent_orchestrator.mcp_server.server._create_terminal")
+    def test_error_during_task_attaches_partials_and_keeps_terminal(
+        self, mock_create, mock_wait, mock_send, mock_interrupt, mock_output, mock_result
+    ):
+        """ERROR mid-task returns immediately with partial output + git state."""
+        mock_create.return_value = ("dev-t1", "claude_code")
+        mock_wait.side_effect = [(True, "idle"), (True, "error")]
+        mock_output.return_value = "partial answer"
+        mock_result.return_value = {"branch": "main", "files_changed": []}
+
+        with patch("cli_agent_orchestrator.mcp_server.server.requests") as mock_requests:
+            result = asyncio.run(_handoff_impl("developer", "Do task"))
+            mock_requests.delete.assert_not_called()  # terminal left for inspection
+
+        assert result.success is False
+        assert "ERROR during the task" in result.message
+        assert result.output == "partial answer"
+        assert result.result == {"branch": "main", "files_changed": []}
+        mock_interrupt.assert_not_called()  # error is already terminal; nothing to stop
+
+    @patch("cli_agent_orchestrator.mcp_server.server._fetch_result_best_effort")
+    @patch("cli_agent_orchestrator.mcp_server.server._fetch_output_best_effort")
+    @patch("cli_agent_orchestrator.mcp_server.server._interrupt_terminal")
+    @patch("cli_agent_orchestrator.mcp_server.server._send_direct_input")
+    @patch("cli_agent_orchestrator.mcp_server.server._wait_for_status_via_api")
+    @patch("cli_agent_orchestrator.mcp_server.server._create_terminal")
+    def test_timeout_interrupts_worker_and_attaches_partials(
+        self, mock_create, mock_wait, mock_send, mock_interrupt, mock_output, mock_result
+    ):
+        """A runaway turn is interrupted (not abandoned) and partial work captured."""
+        mock_create.return_value = ("dev-t1", "claude_code")
+        mock_wait.side_effect = [(True, "idle"), (False, "processing")]
+        mock_output.return_value = "half-finished work"
+        mock_result.return_value = {"branch": "main"}
+
+        with patch("cli_agent_orchestrator.mcp_server.server.requests") as mock_requests:
+            result = asyncio.run(_handoff_impl("developer", "Do task", timeout=30))
+            mock_requests.delete.assert_not_called()  # terminal left for inspection
+
+        assert result.success is False
+        assert "timed out after 30 seconds" in result.message
+        assert "interrupted" in result.message
+        mock_interrupt.assert_called_once_with("dev-t1")
+        assert result.output == "half-finished work"
+        assert result.result == {"branch": "main"}

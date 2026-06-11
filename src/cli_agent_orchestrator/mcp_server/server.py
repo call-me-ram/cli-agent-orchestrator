@@ -34,6 +34,84 @@ TERMINAL_CLEANUP_NUDGE_THRESHOLD = 10
 MAX_USER_PROMPT_ANSWER_LENGTH = 4000
 
 
+def _wait_for_status_via_api(
+    terminal_id: str, statuses: "set[TerminalStatus]", timeout: float
+) -> "tuple[bool, str]":
+    """Block on the API's event-driven wait endpoint; return (reached, final_status).
+
+    The server parks the request on its internal event bus and responds the
+    instant the terminal hits one of ``statuses`` — no polling. Synchronous
+    (requests) by design: callers run it via ``asyncio.to_thread`` so the MCP
+    event loop stays responsive during the long-poll. Falls back to the REST
+    polling helper if the wait endpoint is unavailable (older server).
+    """
+    try:
+        response = requests.get(
+            f"{API_BASE_URL}/terminals/{terminal_id}/wait",
+            params={"status": [s.value for s in statuses], "timeout": timeout},
+            timeout=(5.0, timeout + 30.0),
+        )
+        response.raise_for_status()
+        data = response.json()
+        return bool(data.get("reached")), str(data.get("status") or "unknown")
+    except Exception as e:
+        logger.warning(
+            f"Event-driven wait unavailable for {terminal_id} ({e}); falling back to polling"
+        )
+        reached = wait_until_terminal_status(terminal_id, set(statuses), timeout=timeout)
+        final_status = "unknown"
+        try:
+            r = requests.get(f"{API_BASE_URL}/terminals/{terminal_id}", timeout=MCP_REQUEST_TIMEOUT)
+            if r.status_code == 200:
+                final_status = r.json().get("status", "unknown")
+        except Exception:
+            pass
+        return reached, final_status
+
+
+def _interrupt_terminal(terminal_id: str) -> None:
+    """Best-effort interrupt of a runaway worker turn (Escape stops the
+    current turn in Claude Code / Kimi TUIs without killing the agent)."""
+    try:
+        requests.post(
+            f"{API_BASE_URL}/terminals/{terminal_id}/key",
+            params={"key": "Escape"},
+            timeout=MCP_REQUEST_TIMEOUT,
+        )
+        logger.info(f"Sent interrupt (Escape) to terminal {terminal_id}")
+    except Exception as e:
+        logger.warning(f"Failed to interrupt terminal {terminal_id}: {e}")
+
+
+def _fetch_output_best_effort(terminal_id: str) -> Optional[str]:
+    """Read the worker's last response; None if unavailable (mid-turn, dead)."""
+    try:
+        response = requests.get(
+            f"{API_BASE_URL}/terminals/{terminal_id}/output",
+            params={"mode": "last"},
+            timeout=MCP_REQUEST_TIMEOUT,
+        )
+        if response.status_code == 200:
+            return response.json().get("output")
+    except Exception as e:
+        logger.warning(f"Could not fetch output for {terminal_id}: {e}")
+    return None
+
+
+def _fetch_result_best_effort(terminal_id: str) -> Optional[dict]:
+    """Read the worker's structured git/file result; None if unavailable."""
+    try:
+        response = requests.get(
+            f"{API_BASE_URL}/terminals/{terminal_id}/result",
+            timeout=MCP_REQUEST_TIMEOUT,
+        )
+        if response.status_code == 200:
+            return response.json()
+    except Exception as e:
+        logger.warning(f"Could not fetch structured result for {terminal_id}: {e}")
+    return None
+
+
 def _http_error_detail(error: "requests.HTTPError") -> str:
     """Extract the API's detail message from an HTTP error response."""
     try:
@@ -512,20 +590,27 @@ async def _handoff_impl(
         # the handoff message. Accept COMPLETED in addition to IDLE because
         # providers that use an initial prompt flag process the system prompt
         # as the first user message and produce a response, reaching COMPLETED
-        # without ever showing a bare IDLE state.
-        # Both states indicate the provider is ready to accept input.
+        # without ever showing a bare IDLE state. ERROR is in the wait set so
+        # a worker that dies during initialization fails fast instead of
+        # burning the full ready timeout.
         #
-        # Use a generous timeout (120s) because provider initialization can be
-        # slow: shell warm-up (~5s), CLI startup with MCP server registration
-        # (~10-30s), and API authentication (~5-10s). If the provider's own
-        # initialize() timed out (60-90s), this acts as a fallback to catch
-        # cases where the CLI starts slightly after the provider timeout.
-        # Provider initialization can be slow (~15-45s depending on provider).
-        if not wait_until_terminal_status(
+        # The wait is event-driven (server-side long-poll on the event bus)
+        # and runs in a thread so this coroutine never blocks the MCP loop.
+        # 120s budget: shell warm-up, CLI startup with MCP registration, auth.
+        ready, ready_status = await asyncio.to_thread(
+            _wait_for_status_via_api,
             terminal_id,
-            {TerminalStatus.IDLE, TerminalStatus.COMPLETED},
-            timeout=120.0,
-        ):
+            {TerminalStatus.IDLE, TerminalStatus.COMPLETED, TerminalStatus.ERROR},
+            120.0,
+        )
+        if ready and ready_status == TerminalStatus.ERROR.value:
+            return HandoffResult(
+                success=False,
+                message=f"Worker {terminal_id} reached ERROR during initialization",
+                output=_fetch_output_best_effort(terminal_id),
+                terminal_id=terminal_id,
+            )
+        if not ready:
             return HandoffResult(
                 success=False,
                 message=f"Terminal {terminal_id} did not reach ready status within 120 seconds",
@@ -538,15 +623,40 @@ async def _handoff_impl(
         # Send message to terminal (injects handoff instructions for codex if needed)
         _send_direct_input_handoff(terminal_id, provider, message)
 
-        # Monitor until completion with timeout
-        if not wait_until_terminal_status(
-            terminal_id, TerminalStatus.COMPLETED, timeout=timeout, polling_interval=1.0
-        ):
+        # Monitor until completion — event-driven, ERROR treated as terminal.
+        done, final_status = await asyncio.to_thread(
+            _wait_for_status_via_api,
+            terminal_id,
+            {TerminalStatus.COMPLETED, TerminalStatus.ERROR},
+            float(timeout),
+        )
+        if not done:
+            # Runaway turn: interrupt the worker instead of abandoning it
+            # mid-task, then capture whatever partial work exists. The
+            # terminal is left alive for the supervisor to inspect or retry.
+            _interrupt_terminal(terminal_id)
             return HandoffResult(
                 success=False,
-                message=f"Handoff timed out after {timeout} seconds",
-                output=None,
+                message=(
+                    f"Handoff timed out after {timeout} seconds. The worker was interrupted "
+                    f"(Escape) and terminal {terminal_id} is left alive for inspection — "
+                    "partial output and git state are attached. Retry with a refined task, "
+                    "send a follow-up via send_message, or delete_terminal to discard."
+                ),
+                output=_fetch_output_best_effort(terminal_id),
                 terminal_id=terminal_id,
+                result=_fetch_result_best_effort(terminal_id),
+            )
+        if final_status == TerminalStatus.ERROR.value:
+            return HandoffResult(
+                success=False,
+                message=(
+                    f"Worker {terminal_id} reached ERROR during the task. Partial output and "
+                    "git state are attached; the terminal is left alive for inspection."
+                ),
+                output=_fetch_output_best_effort(terminal_id),
+                terminal_id=terminal_id,
+                result=_fetch_result_best_effort(terminal_id),
             )
 
         # Get the response
@@ -725,7 +835,7 @@ else:
 
 
 # Implementation function for assign
-def _assign_impl(
+async def _assign_impl(
     agent_profile: str, message: str, working_directory: Optional[str] = None
 ) -> Dict[str, Any]:
     """Implementation of assign logic."""
@@ -737,12 +847,21 @@ def _assign_impl(
         # the task message. create_terminal() calls provider.initialize() which
         # already waits 30 s for IDLE, but that check can return a false-positive
         # on the pre-existing shell ❯ prompt (zsh/bash) before claude starts.
-        # A secondary API-level wait (same as handoff uses) catches that race.
-        if not wait_until_terminal_status(
+        # Event-driven wait in a thread (never blocks the MCP loop); ERROR in
+        # the wait set fails fast on a worker that dies during startup.
+        ready, ready_status = await asyncio.to_thread(
+            _wait_for_status_via_api,
             terminal_id,
-            {TerminalStatus.IDLE, TerminalStatus.COMPLETED},
-            timeout=60.0,
-        ):
+            {TerminalStatus.IDLE, TerminalStatus.COMPLETED, TerminalStatus.ERROR},
+            60.0,
+        )
+        if ready and ready_status == TerminalStatus.ERROR.value:
+            return {
+                "success": False,
+                "terminal_id": terminal_id,
+                "message": f"Worker {terminal_id} reached ERROR during initialization",
+            }
+        if not ready:
             return {
                 "success": False,
                 "terminal_id": terminal_id,
@@ -849,7 +968,7 @@ if ENABLE_WORKING_DIRECTORY:
             default=None, description="Optional working directory where the agent should execute"
         ),
     ) -> Dict[str, Any]:
-        return _assign_impl(agent_profile, message, working_directory)
+        return await _assign_impl(agent_profile, message, working_directory)
 
 else:
 
@@ -860,7 +979,7 @@ else:
         ),
         message: str = Field(description=_assign_message_field_desc),
     ) -> Dict[str, Any]:
-        return _assign_impl(agent_profile, message, None)
+        return await _assign_impl(agent_profile, message, None)
 
 
 # Implementation function for send_message
