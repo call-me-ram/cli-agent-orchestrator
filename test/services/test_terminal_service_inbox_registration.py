@@ -64,6 +64,9 @@ def create_mocks():
             get_backend=p("get_backend"),
             db_create_terminal=p("db_create_terminal"),
             provider_manager=p("provider_manager"),
+            # The concurrency cap reads global DB/process state; it has its own
+            # tests (test_concurrency_cap.py) and is a no-op here.
+            _enforce_worker_cap=p("_enforce_worker_cap"),
             generate_terminal_id=p("generate_terminal_id"),
             generate_session_name=p("generate_session_name"),
             generate_window_name=p("generate_window_name"),

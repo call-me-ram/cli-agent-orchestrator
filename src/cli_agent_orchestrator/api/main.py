@@ -77,7 +77,11 @@ from cli_agent_orchestrator.services.inbox_service import inbox_service
 from cli_agent_orchestrator.services.install_service import InstallResult, install_agent
 from cli_agent_orchestrator.services.log_writer import log_writer
 from cli_agent_orchestrator.services.status_monitor import status_monitor
-from cli_agent_orchestrator.services.terminal_service import OutputMode, TerminalInputBlockedError
+from cli_agent_orchestrator.services.terminal_service import (
+    ConcurrencyCapExceededError,
+    OutputMode,
+    TerminalInputBlockedError,
+)
 from cli_agent_orchestrator.utils.agent_profiles import load_agent_profile, resolve_provider
 from cli_agent_orchestrator.utils.event import terminal_id_from_topic
 from cli_agent_orchestrator.utils.logging import setup_logging
@@ -678,6 +682,8 @@ async def create_terminal_in_session(
             registry=get_plugin_registry(request),
         )
         return result
+    except ConcurrencyCapExceededError as e:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except Exception as e:

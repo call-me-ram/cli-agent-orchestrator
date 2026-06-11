@@ -20,6 +20,14 @@ from cli_agent_orchestrator.services.terminal_service import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _no_concurrency_cap():
+    """The cap reads global DB/process state and has its own test module
+    (test_concurrency_cap.py); neutralize it for these workflow tests."""
+    with patch("cli_agent_orchestrator.services.terminal_service._enforce_worker_cap"):
+        yield
+
+
 class TestCreateTerminal:
     """Tests for create_terminal function."""
 

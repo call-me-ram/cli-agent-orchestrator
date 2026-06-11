@@ -17,6 +17,7 @@ Terminal Workflow:
 4. delete_terminal() → Cleans up provider, database record, and logging
 """
 
+import asyncio
 import logging
 import threading
 import time
@@ -29,10 +30,18 @@ from cli_agent_orchestrator.clients.database import create_terminal as db_create
 from cli_agent_orchestrator.clients.database import delete_terminal as db_delete_terminal
 from cli_agent_orchestrator.clients.database import (
     get_terminal_metadata,
+    list_all_terminals,
+    list_terminals_by_session,
     update_last_active,
     update_terminal_shell_command,
 )
-from cli_agent_orchestrator.constants import FIFO_DIR, SESSION_PREFIX, TERMINAL_LOG_DIR
+from cli_agent_orchestrator.constants import (
+    FIFO_DIR,
+    MAX_CONCURRENT_WORKERS,
+    MAX_WORKERS_PER_SESSION,
+    SESSION_PREFIX,
+    TERMINAL_LOG_DIR,
+)
 from cli_agent_orchestrator.models.inbox import OrchestrationType
 from cli_agent_orchestrator.models.provider import ProviderType
 from cli_agent_orchestrator.models.terminal import Terminal, TerminalStatus
@@ -121,6 +130,65 @@ RUNTIME_SKILL_PROMPT_PROVIDERS = {
 }
 
 
+class ConcurrencyCapExceededError(Exception):
+    """Raised when adding a worker would exceed the configured concurrency cap.
+
+    Mapped to HTTP 429 at the API layer so orchestrators can distinguish
+    "back off and retry" from genuine failures.
+    """
+
+
+def _count_active_workers(terminals: list) -> int:
+    """Count live worker terminals for cap enforcement.
+
+    Excluded from the count: terminals with no provider registered in THIS
+    server process (stale DB rows or pre-restart leftovers are not consuming
+    resources the cap protects), supervisors (profile role == "supervisor"),
+    the memory_manager sidecar, and terminals already in a terminal state
+    (COMPLETED/ERROR — finished workers awaiting review/cleanup shouldn't
+    block new fan-out). A terminal whose profile can't be loaded counts as a
+    worker (fail closed).
+    """
+    count = 0
+    for terminal in terminals:
+        if provider_manager.get_provider(terminal["id"]) is None:
+            continue
+        profile_name = terminal.get("agent_profile") or ""
+        if profile_name == "memory_manager":
+            continue
+        try:
+            profile = load_agent_profile(profile_name)
+            if (profile.role or "").lower() == "supervisor":
+                continue
+        except Exception:
+            pass
+        if status_monitor.get_status(terminal["id"]) in (
+            TerminalStatus.COMPLETED,
+            TerminalStatus.ERROR,
+        ):
+            continue
+        count += 1
+    return count
+
+
+def _enforce_worker_cap(session_name: str) -> None:
+    """Reject worker creation that would exceed the per-session or global cap."""
+    session_active = _count_active_workers(list_terminals_by_session(session_name))
+    if session_active >= MAX_WORKERS_PER_SESSION:
+        raise ConcurrencyCapExceededError(
+            f"Session '{session_name}' already has {session_active} active workers "
+            f"(cap {MAX_WORKERS_PER_SESSION}). Wait for a worker to finish, shut down "
+            f"idle workers, or raise CAO_MAX_WORKERS_PER_SESSION."
+        )
+    global_active = _count_active_workers(list_all_terminals())
+    if global_active >= MAX_CONCURRENT_WORKERS:
+        raise ConcurrencyCapExceededError(
+            f"{global_active} active workers across all sessions "
+            f"(cap {MAX_CONCURRENT_WORKERS}). Wait for workers to finish or raise "
+            f"CAO_MAX_CONCURRENT_WORKERS."
+        )
+
+
 async def create_terminal(
     provider: str,
     agent_profile: str,
@@ -203,6 +271,11 @@ async def create_terminal(
             # Add window to existing session
             if not get_backend().session_exists(session_name):
                 raise ValueError(f"Session '{session_name}' not found")
+            # Workers (not the memory_manager sidecar) count against the
+            # orchestration concurrency caps. Enforced before any backend
+            # resource is created so a rejection has nothing to clean up.
+            if agent_profile != "memory_manager":
+                await asyncio.to_thread(_enforce_worker_cap, session_name)
             window_name = get_backend().create_window(
                 session_name,
                 window_name,

@@ -34,6 +34,18 @@ TERMINAL_CLEANUP_NUDGE_THRESHOLD = 10
 MAX_USER_PROMPT_ANSWER_LENGTH = 4000
 
 
+def _http_error_detail(error: "requests.HTTPError") -> str:
+    """Extract the API's detail message from an HTTP error response."""
+    try:
+        payload = error.response.json()
+        detail = payload.get("detail") if isinstance(payload, dict) else None
+        if isinstance(detail, str) and detail:
+            return detail
+    except ValueError:
+        pass
+    return str(error)
+
+
 def _get_cleanup_nudge() -> str:
     """Return a cleanup nudge string if the session has too many terminals, else empty string."""
     current_terminal_id = os.environ.get("CAO_TERMINAL_ID")
@@ -570,6 +582,22 @@ async def _handoff_impl(
             terminal_id=terminal_id,
         )
 
+    except requests.HTTPError as e:
+        if e.response is not None and e.response.status_code == 429:
+            return HandoffResult(
+                success=False,
+                message=(
+                    "Handoff rejected: worker concurrency cap reached. Back off — wait for "
+                    "a running worker to finish (wait_for_terminal_status), review/merge its "
+                    "work, or delete_terminal idle workers, then retry. Detail: "
+                    + _http_error_detail(e)
+                ),
+                output=None,
+                terminal_id=None,
+            )
+        return HandoffResult(
+            success=False, message=f"Handoff failed: {str(e)}", output=None, terminal_id=None
+        )
     except Exception as e:
         return HandoffResult(
             success=False, message=f"Handoff failed: {str(e)}", output=None, terminal_id=None
@@ -719,6 +747,19 @@ def _assign_impl(
             ),
         }
 
+    except requests.HTTPError as e:
+        if e.response is not None and e.response.status_code == 429:
+            return {
+                "success": False,
+                "terminal_id": None,
+                "reason": "concurrency_cap",
+                "message": (
+                    "Assignment rejected: worker concurrency cap reached. Back off — wait "
+                    "for a running worker to finish, review/merge its work, or "
+                    "delete_terminal idle workers, then retry. Detail: " + _http_error_detail(e)
+                ),
+            }
+        return {"success": False, "terminal_id": None, "message": f"Assignment failed: {str(e)}"}
     except Exception as e:
         return {"success": False, "terminal_id": None, "message": f"Assignment failed: {str(e)}"}
 

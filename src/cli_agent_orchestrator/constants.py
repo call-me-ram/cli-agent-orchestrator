@@ -97,6 +97,15 @@ PYTE_SCREEN_ROWS = 50
 # per-chunk rendered detection produces (measured worse than the raw path).
 PYTE_QUIESCENCE_DELAY_S = 0.2
 
+# Concurrency caps for orchestration fan-out. Enforced when a WORKER terminal
+# is added to an existing session (new_session=False); supervisors and the
+# memory_manager sidecar are excluded from the count, as are terminals already
+# in a terminal state (COMPLETED/ERROR). A cap rejection surfaces as HTTP 429
+# so the orchestrator can back off, finish reviews, or shut down idle workers
+# instead of fanning out unboundedly.
+MAX_CONCURRENT_WORKERS = int(os.environ.get("CAO_MAX_CONCURRENT_WORKERS", "16"))
+MAX_WORKERS_PER_SESSION = int(os.environ.get("CAO_MAX_WORKERS_PER_SESSION", "8"))
+
 # Event-driven status wait (GET /terminals/{id}/wait). The long-poll holds a
 # coroutine + an event-bus subscription per caller, so the timeout is capped to
 # keep a buggy/hostile caller from pinning server resources indefinitely.
