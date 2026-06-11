@@ -23,6 +23,7 @@ import threading
 import time
 from datetime import datetime
 from enum import Enum
+from pathlib import Path
 from typing import Dict, Optional
 
 from cli_agent_orchestrator.backends.registry import get_backend
@@ -476,6 +477,95 @@ def get_working_directory(terminal_id: str) -> Optional[str]:
     except Exception as e:
         logger.error(f"Failed to get working directory for terminal {terminal_id}: {e}")
         raise
+
+
+# Cap on the diff text attached to a structured result. Reviewing beyond this
+# size should happen via the files themselves, not an API payload.
+GIT_DIFF_MAX_CHARS = 200_000
+
+
+def _git(working_dir: str, *args: str) -> Optional[str]:
+    """Run a git command in the worker's directory; None on any failure."""
+    import subprocess
+
+    try:
+        proc = subprocess.run(
+            ["git", "-C", working_dir, *args],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except Exception as e:
+        logger.warning(f"git {' '.join(args)} failed in {working_dir}: {e}")
+        return None
+    if proc.returncode != 0:
+        return None
+    return proc.stdout
+
+
+def get_result(terminal_id: str) -> Dict:
+    """Structured file/git-based result for a worker terminal.
+
+    The trustworthy review surface for orchestration: real git state from the
+    worker's working directory (branch, changed files, diff vs HEAD) plus an
+    optional worker-written manifest (``.cao/result.json`` convention),
+    instead of text scraped from the worker's TUI. The scrape path
+    (get_output mode=last) remains available as a narrative complement.
+
+    Raises:
+        ValueError: If the terminal is not found.
+    """
+    import json as json_module
+
+    working_dir = get_working_directory(terminal_id)
+    result: Dict = {
+        "terminal_id": terminal_id,
+        "status": status_monitor.get_status(terminal_id).value,
+        "working_directory": working_dir,
+        "is_git_repo": False,
+        "branch": None,
+        "files_changed": [],
+        "git_diff_stat": None,
+        "git_diff": None,
+        "git_diff_truncated": False,
+        "manifest": None,
+    }
+    if not working_dir:
+        return result
+
+    manifest_path = Path(working_dir) / ".cao" / "result.json"
+    try:
+        if manifest_path.is_file() and manifest_path.stat().st_size <= 65536:
+            result["manifest"] = json_module.loads(manifest_path.read_text())
+    except Exception as e:
+        logger.warning(f"Unreadable result manifest for {terminal_id}: {e}")
+
+    inside = _git(working_dir, "rev-parse", "--is-inside-work-tree")
+    if inside is None or inside.strip() != "true":
+        return result
+    result["is_git_repo"] = True
+
+    branch = _git(working_dir, "rev-parse", "--abbrev-ref", "HEAD")
+    result["branch"] = branch.strip() if branch else None
+
+    porcelain = _git(working_dir, "status", "--porcelain") or ""
+    result["files_changed"] = [
+        {"state": line[:2].strip(), "path": line[3:]}
+        for line in porcelain.splitlines()
+        if len(line) > 3
+    ]
+
+    stat = _git(working_dir, "diff", "--stat", "HEAD")
+    result["git_diff_stat"] = stat.strip() if stat else None
+
+    diff = _git(working_dir, "diff", "HEAD")
+    if diff is not None:
+        if len(diff) > GIT_DIFF_MAX_CHARS:
+            result["git_diff"] = diff[:GIT_DIFF_MAX_CHARS]
+            result["git_diff_truncated"] = True
+        else:
+            result["git_diff"] = diff
+    return result
 
 
 def send_input(

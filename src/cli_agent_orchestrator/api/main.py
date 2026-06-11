@@ -834,6 +834,25 @@ async def get_terminal_output(
         )
 
 
+@app.get("/terminals/{terminal_id}/result")
+async def get_terminal_result(terminal_id: TerminalId) -> Dict:
+    """Structured file/git-based result for a worker terminal.
+
+    Returns the worker's real git state (branch, changed files, diff vs HEAD,
+    capped) plus an optional ``.cao/result.json`` manifest — the trustworthy
+    review surface for orchestrators, instead of TUI-scraped text.
+    """
+    try:
+        return await asyncio.to_thread(terminal_service.get_result, terminal_id)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get terminal result: {str(e)}",
+        )
+
+
 @app.get("/terminals/{terminal_id}/wait")
 async def wait_terminal_status(
     request: Request,

@@ -36,7 +36,8 @@ mcp = FastMCP(
     5. send_session_message to deliver a prompt to a running terminal
     6. wait_for_terminal_status to block until a worker finishes (event-driven;
        prefer this over polling get_terminal_status, which is for one-shot checks)
-    7. get_terminal_output to read a worker's result (or review its files/git diff)
+    7. get_terminal_result to review the worker's REAL git state (branch, diff,
+       changed files); get_terminal_output for its narrative response text
     8. get_session_info or list_sessions to monitor overall progress
     9. shutdown_session to clean up when done
     """,
@@ -484,6 +485,41 @@ async def get_terminal_output(
     if isinstance(data, dict):
         return data
     return {"success": False, "message": "Get terminal output failed: invalid response payload"}
+
+
+@mcp.tool()
+async def get_terminal_result(
+    terminal_id: Annotated[str, Field(description="The terminal ID to read the result from")],
+) -> JsonDict:
+    """Read a worker's structured file/git-based result — the trustworthy
+    review surface for code work.
+
+    Returns the worker's REAL git state from its working directory: current
+    branch, changed files (porcelain), diff stat, the diff vs HEAD (capped),
+    and an optional worker-written ``.cao/result.json`` manifest. Prefer this
+    over get_terminal_output for reviewing code: it cannot be garbled by TUI
+    rendering or truncated scrollback. Typical review loop:
+    wait_for_terminal_status → get_terminal_result → inspect git_diff →
+    merge or send a revision via send_session_message.
+
+    Args:
+        terminal_id: Target terminal ID
+
+    Returns:
+        Dict with terminal_id, status, working_directory, is_git_repo, branch,
+        files_changed, git_diff_stat, git_diff (+ git_diff_truncated), and
+        manifest — or {"success": False, "message": ...} on error
+    """
+    data, error = _request_json(
+        "get",
+        f"/terminals/{terminal_id}/result",
+        operation=f"Get terminal result for '{terminal_id}'",
+    )
+    if error:
+        return {"success": False, "message": error}
+    if isinstance(data, dict):
+        return data
+    return {"success": False, "message": "Get terminal result failed: invalid response payload"}
 
 
 @mcp.tool()

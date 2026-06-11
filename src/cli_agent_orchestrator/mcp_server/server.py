@@ -559,6 +559,20 @@ async def _handoff_impl(
         output_data = response.json()
         output = output_data["output"]
 
+        # Capture the structured git/file result BEFORE the worker terminal is
+        # cleaned up (it is auto-deleted below). Best-effort: a worker outside
+        # a git repo still yields working_directory + manifest fields.
+        structured_result = None
+        try:
+            response = requests.get(
+                f"{API_BASE_URL}/terminals/{terminal_id}/result",
+                timeout=MCP_REQUEST_TIMEOUT,
+            )
+            if response.status_code == 200:
+                structured_result = response.json()
+        except Exception as e:
+            logger.warning(f"Could not capture structured result for {terminal_id}: {e}")
+
         # Send provider-specific exit command to cleanup terminal
         response = requests.post(
             f"{API_BASE_URL}/terminals/{terminal_id}/exit", timeout=MCP_REQUEST_TIMEOUT
@@ -580,6 +594,7 @@ async def _handoff_impl(
             + _get_cleanup_nudge(),
             output=output,
             terminal_id=terminal_id,
+            result=structured_result,
         )
 
     except requests.HTTPError as e:

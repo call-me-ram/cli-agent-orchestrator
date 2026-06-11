@@ -18,6 +18,7 @@ from cli_agent_orchestrator.ops_mcp_server.server import (
     get_profile_details,
     get_session_info,
     get_terminal_output,
+    get_terminal_result,
     get_terminal_status,
     install_profile,
     launch_session,
@@ -618,6 +619,47 @@ class TestTerminalMonitoringTools:
         assert result == {
             "success": False,
             "message": "Get terminal output for 'term-123' failed: api offline",
+        }
+
+    async def test_get_terminal_result_returns_git_payload(self) -> None:
+        """The result tool surfaces the structured git/file review payload."""
+        payload = {
+            "terminal_id": "term-123",
+            "status": "completed",
+            "working_directory": "/tmp/work",
+            "is_git_repo": True,
+            "branch": "cao/dev-1234",
+            "files_changed": [{"state": "M", "path": "app.py"}],
+            "git_diff_stat": " app.py | 2 +-",
+            "git_diff": "diff --git a/app.py b/app.py",
+            "git_diff_truncated": False,
+            "manifest": {"summary": "done"},
+        }
+        with patch(
+            "cli_agent_orchestrator.ops_mcp_server.server.requests.request",
+            return_value=_response(json_data=payload),
+        ) as mock_request:
+            result = await get_terminal_result(terminal_id="term-123")
+
+        assert result == payload
+        mock_request.assert_called_once_with(
+            "get",
+            "http://127.0.0.1:9889/terminals/term-123/result",
+            params=None,
+            json=None,
+        )
+
+    async def test_get_terminal_result_returns_failure_for_not_found(self) -> None:
+        """A 404 surfaces as a failure dict, not an exception."""
+        with patch(
+            "cli_agent_orchestrator.ops_mcp_server.server.requests.request",
+            return_value=_response(status_code=404, json_data={"detail": "Terminal not found"}),
+        ):
+            result = await get_terminal_result(terminal_id="missing")
+
+        assert result == {
+            "success": False,
+            "message": "Get terminal result for 'missing' failed: Terminal not found",
         }
 
     async def test_wait_for_terminal_status_blocks_on_wait_endpoint(self) -> None:
