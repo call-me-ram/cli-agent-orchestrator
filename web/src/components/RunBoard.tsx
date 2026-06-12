@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, TerminalMeta } from '../api'
 import { useStore } from '../store'
 import { deriveRun, narrate, PHASE_COPY, Run, RunMember } from '../orchestration'
 import { FlowPulse } from '../store'
+import { SessionName } from './SessionName'
 import { StartRunWizard } from './StartRunWizard'
 import { OutputViewer } from './OutputViewer'
 import { ConfirmModal } from './ConfirmModal'
@@ -58,7 +59,7 @@ function FlowGraph({ run, pulses, onShow }: {
     return i >= 0 ? workerPos(i) : null
   }
 
-  const FRESH_MS = 2600
+  const FRESH_MS = 5000
   const fresh = pulses.filter(p => Date.now() - p.ts < FRESH_MS && posOf(p.sender) && posOf(p.receiver))
   // Re-render once the youngest pulse expires so frozen dots disappear.
   useEffect(() => {
@@ -180,8 +181,9 @@ function MemberRow({ member, onAnswer, onShow }: {
   )
 }
 
-function RunCard({ run, pulses, onDelete, onAnswer, onShow, onInstruct }: {
+function RunCard({ run, label, pulses, onDelete, onAnswer, onShow, onInstruct }: {
   run: Run
+  label?: string | null
   pulses: FlowPulse[]
   onDelete: (runId: string) => void
   onAnswer: (m: RunMember) => void
@@ -193,7 +195,7 @@ function RunCard({ run, pulses, onDelete, onAnswer, onShow, onInstruct }: {
     <div className="bg-[#16161e] border border-gray-800 rounded-xl p-4" data-testid={`run-${run.runId}`}>
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2 min-w-0">
-          <span className="text-sm font-medium text-gray-200 truncate">{run.runId}</span>
+          <SessionName name={run.runId} label={label} className="text-sm font-medium text-gray-200" />
           <span className={`text-xs font-medium ${phase.tone}`} data-testid={`phase-${run.runId}`}>
             ● {phase.label}
           </span>
@@ -253,40 +255,45 @@ export function RunBoard() {
 
   // Membership reconcile: terminals come and go as the planner spawns
   // workers. Statuses themselves arrive via SSE — this is only the roster.
-  useEffect(() => {
-    const fetchAll = async () => {
-      if (fetchingRef.current) return
-      fetchingRef.current = true
-      try {
-        const all = await Promise.all(
-          sessions.map(async s => {
-            try {
-              const detail = await api.getSession(s.name)
-              return { name: s.name, terminals: detail.terminals || [] }
-            } catch {
-              return { name: s.name, terminals: [] }
-            }
-          })
-        )
-        setDetails(all)
-        // Seed each terminal's status exactly ONCE (new arrivals only);
-        // every later change arrives over SSE. Re-seeding each reconcile
-        // would just be polling with extra steps.
-        all.flatMap(d => d.terminals).forEach(t => {
-          if (seededRef.current.has(t.id)) return
-          seededRef.current.add(t.id)
-          api.getTerminalStatus(t.id)
-            .then(status => { if (status) setTerminalStatus(t.id, status) })
-            .catch(() => {})
+  const fetchAll = useCallback(async () => {
+    if (fetchingRef.current) return
+    fetchingRef.current = true
+    try {
+      const all = await Promise.all(
+        sessions.map(async s => {
+          try {
+            const detail = await api.getSession(s.name)
+            return { name: s.name, terminals: detail.terminals || [] }
+          } catch {
+            return { name: s.name, terminals: [] }
+          }
         })
-      } finally {
-        fetchingRef.current = false
-      }
+      )
+      setDetails(all)
+      all.flatMap(d => d.terminals).forEach(t => {
+        if (seededRef.current.has(t.id)) return
+        seededRef.current.add(t.id)
+        api.getTerminalStatus(t.id)
+          .then(status => { if (status) setTerminalStatus(t.id, status) })
+          .catch(() => {})
+      })
+    } finally {
+      fetchingRef.current = false
     }
+  }, [sessions.map(s => s.name).join(',')])
+
+  useEffect(() => {
     fetchAll()
     const interval = setInterval(fetchAll, 10000)
     return () => clearInterval(interval)
-  }, [sessions.map(s => s.name).join(',')])
+  }, [fetchAll])
+
+  // A flow event means a worker was just added to an EXISTING session (which
+  // doesn't change the session list), so refresh rosters NOW — otherwise the
+  // new worker node, and its incoming pulse, wouldn't appear for up to 10s.
+  useEffect(() => {
+    if (flowPulses.length) fetchAll()
+  }, [flowPulses.length])
 
   // When opening the answer dialog, show the agent's actual question.
   useEffect(() => {
@@ -359,6 +366,7 @@ export function RunBoard() {
             <RunCard
               key={run.runId}
               run={run}
+              label={sessions.find(s => s.name === run.runId)?.label}
               pulses={flowPulses}
               onDelete={id => setConfirmDelete(id)}
               onAnswer={setAnswering}
@@ -377,6 +385,7 @@ export function RunBoard() {
               <RunCard
                 key={run.runId}
                 run={run}
+                label={sessions.find(s => s.name === run.runId)?.label}
                 pulses={flowPulses}
                 onDelete={id => setConfirmDelete(id)}
                 onAnswer={setAnswering}

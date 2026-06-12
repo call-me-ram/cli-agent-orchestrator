@@ -38,6 +38,7 @@ export interface Session {
   id: string
   name: string
   status: string
+  label?: string | null
 }
 
 export interface Terminal {
@@ -137,6 +138,12 @@ export const api = {
   createSession: (provider: string, agentProfile: string, sessionName?: string, workingDirectory?: string) =>
     fetchJSON<Terminal>(`/sessions?provider=${provider}&agent_profile=${agentProfile}${sessionName ? `&session_name=${sessionName}` : ''}${workingDirectory ? `&working_directory=${encodeURIComponent(workingDirectory)}` : ''}`, { method: 'POST', timeoutMs: 90000 }),
   deleteSession: (name: string) => fetchJSON<{ success: boolean; deleted: string[]; errors: any[] }>(`/sessions/${name}`, { method: 'DELETE' }),
+  setSessionLabel: (name: string, label: string) =>
+    fetchJSON<{ session_name: string; label: string | null }>(`/sessions/${name}/label`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ label }),
+    }),
 
   // Terminals
   getTerminalStatus: (id: string) =>

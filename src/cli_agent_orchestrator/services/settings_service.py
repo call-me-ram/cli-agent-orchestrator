@@ -147,6 +147,29 @@ def set_memory_setting(key: str, value: Any) -> Dict[str, Any]:
     return get_memory_settings()
 
 
+def get_session_labels() -> Dict[str, str]:
+    """User-assigned friendly names for sessions (session_name -> label)."""
+    settings = _load()
+    labels = settings.get("session_labels", {})
+    return labels if isinstance(labels, dict) else {}
+
+
+def set_session_label(session_name: str, label: str) -> Dict[str, str]:
+    """Set or clear a session's friendly label (empty label removes it)."""
+    settings = _load()
+    labels = settings.get("session_labels", {})
+    if not isinstance(labels, dict):
+        labels = {}
+    clean = label.strip()[:60]
+    if clean:
+        labels[session_name] = clean
+    else:
+        labels.pop(session_name, None)
+    settings["session_labels"] = labels
+    _save(settings)
+    return labels
+
+
 def get_extra_agent_dirs() -> List[str]:
     """Get extra agent scan directories (user-added custom paths)."""
     settings = _load()

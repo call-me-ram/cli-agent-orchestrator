@@ -8,6 +8,7 @@ import { InboxPanel } from './InboxPanel'
 import { CustomSelect, SelectOption } from './CustomSelect'
 import { TerminalMeta } from '../api'
 import { StatusBadge } from './StatusBadge'
+import { SessionName } from './SessionName'
 import { OutputViewer } from './OutputViewer'
 
 export const FALLBACK_PROVIDERS = ['kiro_cli', 'claude_code', 'q_cli', 'codex', 'gemini_cli', 'hermes', 'kimi_cli', 'copilot_cli', 'opencode_cli']
@@ -217,7 +218,7 @@ export function AgentPanel() {
           <p className="text-gray-500 text-sm">No active sessions. Spawn an agent above to create one.</p>
         ) : (
           <div className="space-y-2">
-            {sessions.filter(s => !sessionSearch || s.id.includes(sessionSearch) || s.name.includes(sessionSearch)).map(s => (
+            {sessions.filter(s => !sessionSearch || s.id.includes(sessionSearch) || (s.label || '').toLowerCase().includes(sessionSearch.toLowerCase())).map(s => (
               <div
                 key={s.id}
                 className={`flex items-center justify-between p-3 rounded-lg cursor-pointer transition-colors ${
@@ -227,7 +228,7 @@ export function AgentPanel() {
               >
                 <div className="flex items-center gap-3">
                   <Bot size={16} className="text-emerald-400" />
-                  <span className="text-sm text-gray-200 font-mono">{s.id}</span>
+                  <SessionName name={s.id} label={s.label} className="text-sm text-gray-200 font-mono" />
                   <span className={`text-xs px-2 py-0.5 rounded-full ${s.status === 'active' ? 'bg-emerald-900/50 text-emerald-400' : 'bg-gray-700 text-gray-400'}`}>
                     {s.status}
                   </span>

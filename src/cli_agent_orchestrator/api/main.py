@@ -688,6 +688,28 @@ async def list_sessions() -> List[Dict]:
         )
 
 
+class SessionLabelUpdate(BaseModel):
+    label: str
+
+
+@app.post("/sessions/{session_name}/label")
+async def set_session_label_endpoint(session_name: str, body: SessionLabelUpdate) -> Dict:
+    """Set (or clear, with an empty string) a friendly label for a session.
+
+    Stored separately from the tmux session name so nothing that references
+    the real name (terminals, DB rows, the backend) is disturbed — this is a
+    pure display alias.
+    """
+    try:
+        validate_tmux_name(session_name, "session_name")
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    from cli_agent_orchestrator.services.settings_service import set_session_label
+
+    labels = set_session_label(session_name, body.label)
+    return {"session_name": session_name, "label": labels.get(session_name)}
+
+
 @app.get("/sessions/{session_name}")
 async def get_session(session_name: str) -> Dict:
     # Validate before entering the try block so a malformed name surfaces
