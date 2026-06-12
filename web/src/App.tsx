@@ -5,11 +5,14 @@ import { DashboardHome } from './components/DashboardHome'
 import { AgentPanel } from './components/AgentPanel'
 import { FlowsPanel } from './components/FlowsPanel'
 import { SettingsPanel } from './components/SettingsPanel'
-import { Bot, Home, Clock, Settings, CheckCircle, XCircle, Info, Wifi, WifiOff } from 'lucide-react'
+import { Bot, Home, Clock, Settings, CheckCircle, XCircle, Info, Wifi, WifiOff, Play } from 'lucide-react'
+import { RunBoard } from './components/RunBoard'
 
-type TabKey = 'home' | 'agents' | 'flows' | 'settings'
+type TabKey = 'runs' | 'home' | 'agents' | 'flows' | 'settings'
 
 const TABS: { key: TabKey; label: string; icon: React.ReactNode }[] = [
+  // "Runs" is the non-technical front door; the rest is the advanced surface.
+  { key: 'runs', label: 'Runs', icon: <Play size={16} /> },
   { key: 'home', label: 'Home', icon: <Home size={16} /> },
   { key: 'agents', label: 'Agents', icon: <Bot size={16} /> },
   { key: 'flows', label: 'Flows', icon: <Clock size={16} /> },
@@ -48,13 +51,18 @@ function Snackbar() {
 }
 
 export default function App() {
-  const [tab, setTab] = useState<TabKey>('home')
-  const { sessions, connected, fetchSessions } = useStore()
+  const [tab, setTab] = useState<TabKey>('runs')
+  const { sessions, connected, fetchSessions, connectStatusStream } = useStore()
 
   useEffect(() => {
     fetchSessions()
     const interval = setInterval(fetchSessions, 10000)
-    return () => clearInterval(interval)
+    // Live terminal-status push over SSE (replaces per-terminal polling).
+    const es = connectStatusStream()
+    return () => {
+      clearInterval(interval)
+      es.close()
+    }
   }, [])
 
   // Keyboard shortcuts: Alt+1-4
@@ -130,6 +138,7 @@ export default function App() {
       <main className="max-w-7xl mx-auto px-6 py-6">
         <ErrorBoundary>
           <Suspense fallback={<div className="text-gray-500 text-sm py-12 text-center">Loading...</div>}>
+            {tab === 'runs' && <RunBoard />}
             {tab === 'home' && <DashboardHome onNavigate={(t) => setTab(t as TabKey)} />}
             {tab === 'agents' && <AgentPanel />}
             {tab === 'flows' && <FlowsPanel />}

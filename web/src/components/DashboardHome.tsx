@@ -156,21 +156,17 @@ export function DashboardHome({ onNavigate }: { onNavigate: (tab: string) => voi
     return () => clearInterval(interval)
   }, [sessions.map(s => s.id).join(',')])
 
-  // Poll statuses
+  // One-shot status snapshot; live updates arrive via the SSE status stream
+  // (store.connectStatusStream), so no polling here.
   useEffect(() => {
     const allIds = sessionData.flatMap(s => s.terminals.map(t => t.id))
     if (!allIds.length) return
     clearTerminalStatuses(allIds)
-    const fetch = () => {
-      allIds.forEach(id => {
-        api.getTerminalStatus(id)
-          .then(status => { if (status) setTerminalStatus(id, status) })
-          .catch(() => {})
-      })
-    }
-    fetch()
-    const interval = setInterval(fetch, 3000)
-    return () => clearInterval(interval)
+    allIds.forEach(id => {
+      api.getTerminalStatus(id)
+        .then(status => { if (status) setTerminalStatus(id, status) })
+        .catch(() => {})
+    })
   }, [sessionData.flatMap(s => s.terminals.map(t => t.id)).join(',')])
 
   useEffect(() => {

@@ -1568,3 +1568,43 @@ class TestClaudeCodeScreenDetection:
 
     def test_empty_screen_is_unknown(self):
         assert self._p().get_status_from_screen(["", "", ""]) == TerminalStatus.UNKNOWN
+
+
+class TestEnsureWorkspaceTrust:
+    """Pre-seeding ~/.claude.json trust so the folder dialog never stalls init."""
+
+    def _provider_cls(self):
+        from cli_agent_orchestrator.providers.claude_code import ClaudeCodeProvider
+
+        return ClaudeCodeProvider
+
+    def test_seeds_trust_for_new_directory(self, tmp_path, monkeypatch):
+        import json
+        from pathlib import Path as P
+
+        monkeypatch.setattr(P, "home", classmethod(lambda cls: tmp_path))
+        self._provider_cls()._ensure_workspace_trust("/tmp/some-project")
+        config = json.loads((tmp_path / ".claude.json").read_text())
+        assert config["projects"]["/tmp/some-project"]["hasTrustDialogAccepted"] is True
+
+    def test_preserves_existing_config(self, tmp_path, monkeypatch):
+        import json
+        from pathlib import Path as P
+
+        monkeypatch.setattr(P, "home", classmethod(lambda cls: tmp_path))
+        (tmp_path / ".claude.json").write_text(
+            json.dumps({"theme": "dark", "projects": {"/other": {"hasTrustDialogAccepted": False}}})
+        )
+        self._provider_cls()._ensure_workspace_trust("/tmp/some-project")
+        config = json.loads((tmp_path / ".claude.json").read_text())
+        assert config["theme"] == "dark"
+        assert config["projects"]["/other"]["hasTrustDialogAccepted"] is False
+        assert config["projects"]["/tmp/some-project"]["hasTrustDialogAccepted"] is True
+
+    def test_unparseable_config_left_untouched(self, tmp_path, monkeypatch):
+        from pathlib import Path as P
+
+        monkeypatch.setattr(P, "home", classmethod(lambda cls: tmp_path))
+        (tmp_path / ".claude.json").write_text("{corrupt json")
+        self._provider_cls()._ensure_workspace_trust("/tmp/some-project")
+        assert (tmp_path / ".claude.json").read_text() == "{corrupt json"

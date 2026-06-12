@@ -12,11 +12,13 @@ export default defineConfig({
     globals: true,
     environment: 'jsdom',
     setupFiles: './src/test/setup.ts',
+    exclude: ['e2e/**', 'node_modules/**'],
   },
   server: {
     host: 'localhost',
     port: 5173,
     proxy: {
+      '/events': { target: 'http://localhost:9889', changeOrigin: true },
       '/sessions': { target: 'http://localhost:9889', changeOrigin: true },
       '/terminals': { target: 'http://localhost:9889', changeOrigin: true, ws: true },
       '/health': { target: 'http://localhost:9889', changeOrigin: true },

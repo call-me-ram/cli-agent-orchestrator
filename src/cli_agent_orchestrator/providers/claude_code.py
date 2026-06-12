@@ -1,5 +1,6 @@
 """Claude Code provider implementation."""
 
+import asyncio
 import json
 import logging
 import re
@@ -271,6 +272,37 @@ class ClaudeCodeProvider(BaseProvider):
             json.dump(settings, f, indent=2)
         logger.info("Set skipDangerousModePermissionPrompt in ~/.claude/settings.json")
 
+    @staticmethod
+    def _ensure_workspace_trust(working_directory: str) -> None:
+        """Pre-seed Claude's per-project trust so the "do you trust this
+        folder?" dialog never appears.
+
+        CAO launches agents only in directories the OPERATOR chose (the run
+        wizard's folder field, a supervisor's cwd, an isolated worktree), so
+        trust is implied. Without the pre-seed, a launch in a fresh directory
+        stalls on the dialog until the init timeout — observed live as
+        systematic POST /sessions 500s from the run wizard. Mirrors the
+        ``hasTrustDialogAccepted`` entry Claude itself writes on acceptance.
+        """
+        config_path = Path.home() / ".claude.json"
+        config: dict = {}
+        if config_path.exists():
+            try:
+                config = json.loads(config_path.read_text())
+            except (json.JSONDecodeError, OSError):
+                return  # never clobber a file we cannot parse
+        if not isinstance(config, dict):
+            return
+        entry = config.setdefault("projects", {}).setdefault(working_directory, {})
+        if entry.get("hasTrustDialogAccepted") is True:
+            return
+        entry["hasTrustDialogAccepted"] = True
+        try:
+            config_path.write_text(json.dumps(config, indent=2))
+            logger.info(f"Pre-trusted workspace {working_directory} in ~/.claude.json")
+        except OSError as e:
+            logger.warning(f"Could not pre-trust workspace {working_directory}: {e}")
+
     def _handle_startup_prompts(self, timeout: float = 20.0) -> None:
         """Auto-accept startup prompts that may appear before the REPL is ready.
 
@@ -342,6 +374,15 @@ class ClaudeCodeProvider(BaseProvider):
         # Prevent bypass permissions dialog from appearing (settings-based fix).
         self._ensure_skip_bypass_prompt_setting()
 
+        # Prevent the workspace trust dialog: pre-trust the pane's directory
+        # (the operator chose it) before claude launches there.
+        try:
+            pane_cwd = get_backend().get_pane_working_directory(self.session_name, self.window_name)
+            if pane_cwd:
+                self._ensure_workspace_trust(pane_cwd)
+        except Exception as e:
+            logger.warning(f"Workspace pre-trust skipped: {e}")
+
         # Build properly escaped command string
         command = self._build_claude_command()
 
@@ -351,8 +392,11 @@ class ClaudeCodeProvider(BaseProvider):
         status_monitor.notify_input_sent(self.terminal_id)
         get_backend().send_keys(self.session_name, self.window_name, command)
 
-        # Handle startup prompts (bypass permissions + workspace trust)
-        self._handle_startup_prompts(timeout=20.0)
+        # Handle startup prompts (bypass permissions + workspace trust).
+        # In a thread: the handler polls with time.sleep and would otherwise
+        # block the server's event loop. 45s covers slow cold starts where
+        # a dialog appears late (a 20s budget missed it live).
+        await asyncio.to_thread(self._handle_startup_prompts, 45.0)
 
         # Wait for Claude Code prompt to be ready.
         # Accept both IDLE and COMPLETED — some CLI versions show a startup

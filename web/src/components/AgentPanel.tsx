@@ -119,20 +119,15 @@ export function AgentPanel() {
     }
   }, [activeSession])
 
-  // Poll terminal statuses for visible terminals in the session detail
+  // One-shot status snapshot for visible terminals; live updates arrive via
+  // the SSE status stream (store.connectStatusStream), so no polling here.
   useEffect(() => {
     if (!activeSessionDetail?.terminals.length) return
-    const terminalIds = activeSessionDetail.terminals.map(t => t.id)
-    const fetchStatuses = () => {
-      terminalIds.forEach(id => {
-        api.getTerminalStatus(id)
-          .then(status => { if (status) setTerminalStatus(id, status) })
-          .catch(() => {})
-      })
-    }
-    fetchStatuses()
-    const interval = setInterval(fetchStatuses, 3000)
-    return () => clearInterval(interval)
+    activeSessionDetail.terminals.forEach(t => {
+      api.getTerminalStatus(t.id)
+        .then(status => { if (status) setTerminalStatus(t.id, status) })
+        .catch(() => {})
+    })
   }, [activeSessionDetail?.terminals.map(t => t.id).join(',')])
 
   const handleCreate = async () => {

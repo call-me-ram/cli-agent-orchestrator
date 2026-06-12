@@ -28,6 +28,7 @@ interface Store {
   setConnected: (connected: boolean) => void
   setTerminalStatus: (id: string, status: string) => void
   clearTerminalStatuses: (ids: string[]) => void
+  connectStatusStream: () => EventSource
 }
 
 export const useStore = create<Store>((set, get) => ({
@@ -98,6 +99,23 @@ export const useStore = create<Store>((set, get) => ({
   showSnackbar: (snackbar) => set({ snackbar }),
   hideSnackbar: () => set({ snackbar: null }),
   setConnected: (connected) => set({ connected }),
+  connectStatusStream: () => {
+    // Live status push: one EventSource replaces the per-terminal 3s polls.
+    // The stream is deltas-only and lossy on reconnect, so components still
+    // fetch current state via REST on mount/(re)connect; this just makes
+    // status changes land instantly. EventSource auto-reconnects.
+    const es = new EventSource('/events')
+    es.addEventListener('status', (e: MessageEvent) => {
+      try {
+        const { terminal_id, status } = JSON.parse(e.data)
+        if (terminal_id && status) get().setTerminalStatus(terminal_id, status)
+      } catch {
+        // Malformed frame — ignore; REST refresh remains the safety net.
+      }
+    })
+    es.onopen = () => get().setConnected(true)
+    return es
+  },
   setTerminalStatus: (id, status) =>
     set(state => {
       const normalized = status ? status.toUpperCase() : status
