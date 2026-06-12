@@ -43,7 +43,9 @@ function FlowGraph({ run, pulses, onShow }: {
   const [, forceRender] = useState(0)
   const planner = run.planner
   const workers = run.workers
-  if (!planner || workers.length === 0) return null
+  // Render even for a lone planner: the graph should be visible from the
+  // first second of a run, with worker nodes popping in as they spawn.
+  if (!planner) return null
 
   const W = 480
   const ROW = 56
