@@ -26,9 +26,12 @@ test.describe('Runs board (non-technical flow)', () => {
     })
     await page.goto('/')
     await expect(page.getByText('Live', { exact: true })).toBeVisible()
+    // Let the page-load one-shot seeds (one GET per newly-seen terminal)
+    // finish before counting — they are allowed; POLLING is not.
+    await page.waitForTimeout(2_500)
     const before = statusPolls.length
     await page.waitForTimeout(7_000)
-    // One-shot seeds are allowed at load; 7 quiet seconds must add none.
+    // 7 quiet seconds must add no status requests.
     expect(statusPolls.length).toBe(before)
   })
 
