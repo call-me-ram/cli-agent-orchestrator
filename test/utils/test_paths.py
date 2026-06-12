@@ -63,3 +63,69 @@ class TestNormalizeWorkingDirectory:
         f.write_text("x")
         with pytest.raises(ValueError, match="is a file"):
             normalize_working_directory(str(f), mnt_root=mnt)
+
+
+class TestSettingsDisabledDirs:
+    """GH #281: removed default directories stay removed."""
+
+    def test_disabled_default_excluded_from_agent_dirs(self, tmp_path, monkeypatch):
+        from cli_agent_orchestrator.services import settings_service as svc
+
+        monkeypatch.setattr(svc, "SETTINGS_FILE", tmp_path / "settings.json")
+        kiro_default = svc._DEFAULTS["kiro_cli"]
+
+        svc.set_disabled_agent_dirs([kiro_default])
+        dirs = svc.get_agent_dirs()
+        assert kiro_default not in dirs.values()
+        assert svc.get_disabled_agent_dirs() == [kiro_default]
+
+        # Restore: empty disabled list brings the default back.
+        svc.set_disabled_agent_dirs([])
+        assert kiro_default in svc.get_agent_dirs().values()
+
+    def test_unknown_paths_are_not_persisted_as_disabled(self, tmp_path, monkeypatch):
+        from cli_agent_orchestrator.services import settings_service as svc
+
+        monkeypatch.setattr(svc, "SETTINGS_FILE", tmp_path / "settings.json")
+        assert svc.set_disabled_agent_dirs(["/not/a/known/default"]) == []
+
+
+class TestFsDirsEndpoint:
+    """GH #282: server-side folder listing for the in-app browser."""
+
+    def _client(self):
+        from fastapi.testclient import TestClient
+
+        from cli_agent_orchestrator.api.main import app
+        from cli_agent_orchestrator.plugins import PluginRegistry
+
+        app.state.plugin_registry = PluginRegistry()
+        return TestClient(app)
+
+    def test_lists_only_directories_visible_first(self, tmp_path):
+        (tmp_path / "beta").mkdir()
+        (tmp_path / "alpha").mkdir()
+        (tmp_path / ".hidden").mkdir()
+        (tmp_path / "a_file.txt").write_text("x")
+
+        resp = self._client().get(
+            "/fs/dirs", params={"path": str(tmp_path)}, headers={"Host": "localhost"}
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["dirs"] == ["alpha", "beta", ".hidden"]
+        assert body["path"] == str(tmp_path)
+        assert body["parent"] == str(tmp_path.parent)
+
+    def test_missing_folder_is_a_clear_400(self):
+        resp = self._client().get(
+            "/fs/dirs", params={"path": "/definitely/not/here"}, headers={"Host": "localhost"}
+        )
+        assert resp.status_code == 400
+
+    def test_defaults_to_home(self):
+        resp = self._client().get("/fs/dirs", headers={"Host": "localhost"})
+        assert resp.status_code == 200
+        from pathlib import Path
+
+        assert resp.json()["path"] == str(Path.home())

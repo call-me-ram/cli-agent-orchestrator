@@ -456,36 +456,88 @@ async def get_agent_dirs_endpoint() -> Dict:
     """Get configured agent directories per provider."""
     from cli_agent_orchestrator.services.settings_service import (
         get_agent_dirs,
+        get_disabled_agent_dirs,
         get_extra_agent_dirs,
     )
 
-    return {"agent_dirs": get_agent_dirs(), "extra_dirs": get_extra_agent_dirs()}
+    return {
+        "agent_dirs": get_agent_dirs(),
+        "extra_dirs": get_extra_agent_dirs(),
+        "disabled_dirs": get_disabled_agent_dirs(),
+    }
 
 
 class AgentDirsUpdate(BaseModel):
     agent_dirs: Optional[Dict[str, str]] = None
     extra_dirs: Optional[List[str]] = None
+    disabled_dirs: Optional[List[str]] = None
 
 
 @app.post("/settings/agent-dirs")
 async def set_agent_dirs_endpoint(body: AgentDirsUpdate) -> Dict:
     """Update agent directories per provider."""
     from cli_agent_orchestrator.services.settings_service import (
+        get_agent_dirs,
+        get_disabled_agent_dirs,
         get_extra_agent_dirs,
         set_agent_dirs,
+        set_disabled_agent_dirs,
         set_extra_agent_dirs,
     )
 
-    result_dirs = {}
-    result_extra = []
     if body.agent_dirs:
-        result_dirs = set_agent_dirs(body.agent_dirs)
+        set_agent_dirs(body.agent_dirs)
     if body.extra_dirs is not None:
-        result_extra = set_extra_agent_dirs(body.extra_dirs)
+        set_extra_agent_dirs(body.extra_dirs)
+    if body.disabled_dirs is not None:
+        set_disabled_agent_dirs(body.disabled_dirs)
+    # Return the EFFECTIVE state (not just what changed) so the UI can render
+    # truth instead of optimistically trusting its own writes — see GH #281.
     return {
-        "agent_dirs": result_dirs or {},
-        "extra_dirs": result_extra or get_extra_agent_dirs(),
+        "agent_dirs": get_agent_dirs(),
+        "extra_dirs": get_extra_agent_dirs(),
+        "disabled_dirs": get_disabled_agent_dirs(),
     }
+
+
+@app.get("/fs/dirs")
+async def list_directories(path: Optional[str] = None) -> Dict:
+    """List subdirectories of a server-side folder (UI folder browser, GH #282).
+
+    Directories only — never file names or contents. Accepts Windows paths
+    (translated to the WSL mount like working directories are). Same
+    localhost-only posture as the rest of the API; documents nothing the
+    /sessions working_directory parameter couldn't already reach.
+    """
+    try:
+        if path:
+            resolved = Path(
+                normalize_working_directory(path, create_missing=False)  # type: ignore[arg-type]
+            )
+        else:
+            resolved = Path.home()
+        resolved = resolved.resolve()
+        if not resolved.is_dir():
+            raise ValueError(f"Not a folder: {resolved}")
+        visible, hidden = [], []
+        for entry in sorted(resolved.iterdir(), key=lambda e: e.name.lower()):
+            try:
+                if not entry.is_dir():
+                    continue
+            except OSError:
+                continue
+            (hidden if entry.name.startswith(".") else visible).append(entry.name)
+        # Hidden folders matter here (profile dirs live under ~/.kiro, ~/.aws)
+        # but list after the visible ones.
+        parent = str(resolved.parent) if resolved.parent != resolved else None
+        return {"path": str(resolved), "parent": parent, "dirs": visible + hidden}
+    except PermissionError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"No permission to read that folder",
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
 @app.get("/skills/{name}", response_model=SkillContentResponse)

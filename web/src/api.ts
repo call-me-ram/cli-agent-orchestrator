@@ -69,6 +69,7 @@ export interface AgentProfileInfo {
 export interface AgentDirsSettings {
   agent_dirs: Record<string, string>
   extra_dirs: string[]
+  disabled_dirs?: string[]
 }
 
 export interface InboxMessage {
@@ -106,7 +107,11 @@ export const api = {
 
   // Settings
   getAgentDirs: () => fetchJSON<AgentDirsSettings>('/settings/agent-dirs'),
-  setAgentDirs: (data: { agent_dirs?: Record<string, string>; extra_dirs?: string[] }) =>
+  listDirs: (path?: string) =>
+    fetchJSON<{ path: string; parent: string | null; dirs: string[] }>(
+      `/fs/dirs${path ? `?path=${encodeURIComponent(path)}` : ''}`
+    ),
+  setAgentDirs: (data: { agent_dirs?: Record<string, string>; extra_dirs?: string[]; disabled_dirs?: string[] }) =>
     fetchJSON<AgentDirsSettings>('/settings/agent-dirs', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

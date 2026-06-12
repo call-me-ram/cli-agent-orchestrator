@@ -50,7 +50,31 @@ def get_agent_dirs() -> Dict[str, str]:
     # Merge defaults with saved — saved overrides defaults
     result = dict(_DEFAULTS)
     result.update(saved)
+    # User-disabled defaults stay removed (GH #281: deleting a default in the
+    # UI used to silently come back because defaults were always re-merged).
+    disabled = set(get_disabled_agent_dirs())
+    if disabled:
+        result = {k: v for k, v in result.items() if v not in disabled}
     return result
+
+
+def get_disabled_agent_dirs() -> List[str]:
+    """Default directories the user removed; persisted so they stay removed."""
+    settings = _load()
+    dirs = settings.get("disabled_agent_dirs", [])
+    return dirs if isinstance(dirs, list) else []
+
+
+def set_disabled_agent_dirs(dirs: List[str]) -> List[str]:
+    """Persist which default directories are disabled. Only known default
+    paths are accepted — arbitrary entries would silently do nothing."""
+    valid = set(_DEFAULTS.values())
+    cleaned = [d for d in dirs if isinstance(d, str) and d.strip() and d in valid]
+    settings = _load()
+    settings["disabled_agent_dirs"] = cleaned
+    _save(settings)
+    logger.info(f"Disabled default agent dirs: {cleaned}")
+    return cleaned
 
 
 def set_agent_dirs(dirs: Dict[str, str]) -> Dict[str, str]:

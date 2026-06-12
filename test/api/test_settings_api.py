@@ -81,6 +81,10 @@ class TestSetAgentDirsEndpoint:
             patch(
                 "cli_agent_orchestrator.services.settings_service.set_agent_dirs",
                 return_value=updated_dirs,
+            ) as mock_set,
+            patch(
+                "cli_agent_orchestrator.services.settings_service.get_agent_dirs",
+                return_value=updated_dirs,
             ),
             patch(
                 "cli_agent_orchestrator.services.settings_service.get_extra_agent_dirs",
@@ -94,6 +98,8 @@ class TestSetAgentDirsEndpoint:
 
         assert response.status_code == 200
         data = response.json()
+        mock_set.assert_called_once_with({"kiro_cli": "/new/kiro"})
+        # The endpoint returns the EFFECTIVE state (GH #281), not an echo.
         assert data["agent_dirs"] == updated_dirs
         assert data["extra_dirs"] == ["/existing/extra"]
 
@@ -137,6 +143,10 @@ class TestSetAgentDirsEndpoint:
                 return_value=["/extra1"],
             ),
             patch(
+                "cli_agent_orchestrator.services.settings_service.get_agent_dirs",
+                return_value=updated_dirs,
+            ),
+            patch(
                 "cli_agent_orchestrator.services.settings_service.get_extra_agent_dirs",
                 return_value=["/extra1"],
             ),
@@ -154,15 +164,23 @@ class TestSetAgentDirsEndpoint:
         assert data["agent_dirs"] == updated_dirs
         assert data["extra_dirs"] == ["/extra1"]
 
-    def test_empty_body_returns_defaults(self, client):
-        """POST /settings/agent-dirs with empty body returns empty agent_dirs and existing extra."""
-        with patch(
-            "cli_agent_orchestrator.services.settings_service.get_extra_agent_dirs",
-            return_value=[],
+    def test_empty_body_returns_effective_state(self, client):
+        """POST with an empty body changes nothing and returns current state."""
+        with (
+            patch(
+                "cli_agent_orchestrator.services.settings_service.get_agent_dirs",
+                return_value={"kiro_cli": "/default/kiro"},
+            ),
+            patch(
+                "cli_agent_orchestrator.services.settings_service.get_extra_agent_dirs",
+                return_value=[],
+            ),
         ):
             response = client.post("/settings/agent-dirs", json={})
 
         assert response.status_code == 200
         data = response.json()
-        assert data["agent_dirs"] == {}
+        # Effective state, not an echo of the (empty) request — GH #281.
+        assert data["agent_dirs"] == {"kiro_cli": "/default/kiro"}
         assert data["extra_dirs"] == []
+        assert data["disabled_dirs"] == []

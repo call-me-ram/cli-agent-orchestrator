@@ -1,27 +1,36 @@
 import { useState, useEffect } from 'react'
-import { api, AgentDirsSettings } from '../api'
+import { api } from '../api'
 import { useStore } from '../store'
-import { FolderOpen, Save, Plus, X, RefreshCw, CheckCircle } from 'lucide-react'
+import { FolderBrowser } from './FolderBrowser'
+import { FolderOpen, Save, Plus, X, RefreshCw, CheckCircle, RotateCcw, FolderSearch } from 'lucide-react'
 
 export function SettingsPanel() {
-  const [settings, setSettings] = useState<AgentDirsSettings | null>(null)
-  const [dirs, setDirs] = useState<string[]>([])
+  const [loaded, setLoaded] = useState(false)
+  // Defaults are built-in per-provider directories: removable, but removal is
+  // a persisted "disable" (GH #281 — they used to silently reappear).
+  const [defaults, setDefaults] = useState<string[]>([])
+  const [disabledDefaults, setDisabledDefaults] = useState<string[]>([])
+  const [extras, setExtras] = useState<string[]>([])
   const [newDir, setNewDir] = useState('')
+  const [browsing, setBrowsing] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [profileCount, setProfileCount] = useState<number | null>(null)
   const { showSnackbar } = useStore()
 
+  const applySettings = (s: { agent_dirs: Record<string, string>; extra_dirs: string[]; disabled_dirs?: string[] }) => {
+    const activeDefaults = [...new Set(Object.values(s.agent_dirs))].filter(Boolean)
+    const disabled = s.disabled_dirs || []
+    setDefaults(activeDefaults)
+    setDisabledDefaults(disabled)
+    // True extras only: legacy saves duplicated defaults into extra_dirs.
+    setExtras((s.extra_dirs || []).filter(d => !activeDefaults.includes(d) && !disabled.includes(d)))
+  }
+
   const load = async () => {
     try {
-      const s = await api.getAgentDirs()
-      setSettings(s)
-      // Merge all configured dirs into a single flat list, deduped
-      const allDirs = [
-        ...Object.values(s.agent_dirs),
-        ...s.extra_dirs,
-      ].filter((d, i, arr) => d && arr.indexOf(d) === i)
-      setDirs(allDirs)
+      applySettings(await api.getAgentDirs())
+      setLoaded(true)
     } catch {
       showSnackbar({ type: 'error', message: 'Failed to load settings' })
     }
@@ -43,9 +52,10 @@ export function SettingsPanel() {
     setSaving(true)
     setSaved(false)
     try {
-      // Send all dirs as extra_dirs — the backend will scan all of them
-      const result = await api.setAgentDirs({ extra_dirs: dirs })
-      setSettings(result)
+      const result = await api.setAgentDirs({ extra_dirs: extras, disabled_dirs: disabledDefaults })
+      // Render the EFFECTIVE state the server returns — never our own
+      // optimistic copy (that's how the misleading "saved" arose).
+      applySettings(result)
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
       showSnackbar({ type: 'success', message: 'Settings saved' })
@@ -57,21 +67,31 @@ export function SettingsPanel() {
     }
   }
 
-  const addDir = () => {
-    const trimmed = newDir.trim()
-    if (trimmed && !dirs.includes(trimmed)) {
-      setDirs([...dirs, trimmed])
-      setNewDir('')
+  const addDir = (dir?: string) => {
+    const trimmed = (dir ?? newDir).trim()
+    if (!trimmed) return
+    if (extras.includes(trimmed) || defaults.includes(trimmed)) {
+      showSnackbar({ type: 'info', message: 'That folder is already in the list' })
+      return
     }
+    setExtras([...extras, trimmed])
+    setNewDir('')
   }
 
-  const removeDir = (idx: number) => {
-    setDirs(dirs.filter((_, i) => i !== idx))
-  }
-
-  if (!settings) {
+  if (!loaded) {
     return <div className="text-gray-500 text-sm py-8 text-center">Loading settings...</div>
   }
+
+  const dirRow = (dir: string, tag: string | null, onRemove: () => void) => (
+    <div key={dir} className="flex items-center gap-2 bg-gray-900/50 border border-gray-700/30 rounded-lg px-3 py-2.5">
+      <FolderOpen size={14} className="text-emerald-500 shrink-0" />
+      <span className="text-sm text-gray-300 font-mono flex-1 truncate" title={dir}>{dir}</span>
+      {tag && <span className="text-[10px] uppercase tracking-wide text-gray-500 bg-gray-800 px-1.5 py-0.5 rounded shrink-0">{tag}</span>}
+      <button onClick={onRemove} className="text-gray-500 hover:text-red-400 transition-colors shrink-0" title="Remove directory">
+        <X size={14} />
+      </button>
+    </div>
+  )
 
   return (
     <div className="space-y-6">
@@ -93,29 +113,45 @@ export function SettingsPanel() {
           Install built-in profiles with: <code className="bg-gray-900 px-1.5 py-0.5 rounded text-emerald-300">cao install developer</code>
         </p>
 
-        {dirs.length > 0 && (
-          <div className="space-y-2 mb-4">
-            {dirs.map((dir, i) => (
-              <div key={i} className="flex items-center gap-2 bg-gray-900/50 border border-gray-700/30 rounded-lg px-3 py-2.5">
-                <FolderOpen size={14} className="text-emerald-500 shrink-0" />
-                <span className="text-sm text-gray-300 font-mono flex-1 truncate" title={dir}>{dir}</span>
-                <button
-                  onClick={() => removeDir(i)}
-                  className="text-gray-500 hover:text-red-400 transition-colors shrink-0"
-                  title="Remove directory"
-                >
-                  <X size={14} />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
+        <div className="space-y-2 mb-4">
+          {defaults.map(dir =>
+            dirRow(dir, 'default', () => {
+              setDefaults(defaults.filter(d => d !== dir))
+              setDisabledDefaults([...disabledDefaults, dir])
+            })
+          )}
+          {extras.map(dir => dirRow(dir, null, () => setExtras(extras.filter(d => d !== dir))))}
+        </div>
 
-        {dirs.length === 0 && (
+        {defaults.length === 0 && extras.length === 0 && (
           <div className="text-center py-6 mb-4 bg-gray-900/30 border border-dashed border-gray-700 rounded-lg">
             <FolderOpen size={24} className="mx-auto text-gray-600 mb-2" />
             <p className="text-gray-500 text-sm">No directories configured.</p>
             <p className="text-gray-600 text-xs mt-1">Add a directory below to start discovering agent profiles.</p>
+          </div>
+        )}
+
+        {disabledDefaults.length > 0 && (
+          <div className="mb-4">
+            <p className="text-xs text-gray-600 mb-1.5">Removed defaults (click to restore):</p>
+            <div className="space-y-1.5">
+              {disabledDefaults.map(dir => (
+                <div key={dir} className="flex items-center gap-2 bg-gray-900/30 border border-gray-800 rounded-lg px-3 py-2 opacity-60">
+                  <FolderOpen size={13} className="text-gray-600 shrink-0" />
+                  <span className="text-xs text-gray-500 font-mono flex-1 truncate line-through" title={dir}>{dir}</span>
+                  <button
+                    onClick={() => {
+                      setDisabledDefaults(disabledDefaults.filter(d => d !== dir))
+                      setDefaults([...defaults, dir])
+                    }}
+                    className="flex items-center gap-1 text-xs text-gray-500 hover:text-emerald-400 shrink-0"
+                    title="Restore this default directory"
+                  >
+                    <RotateCcw size={12} /> Restore
+                  </button>
+                </div>
+              ))}
+            </div>
           </div>
         )}
 
@@ -129,13 +165,24 @@ export function SettingsPanel() {
             className="flex-1 bg-gray-900 border border-gray-700 text-gray-200 text-sm rounded-lg px-3 py-2.5 font-mono focus:border-emerald-500 focus:outline-none"
           />
           <button
-            onClick={addDir}
+            onClick={() => setBrowsing(true)}
+            className="flex items-center gap-1.5 bg-gray-700 hover:bg-gray-600 text-white text-sm px-4 py-2.5 rounded-lg transition-colors"
+            title="Browse the server's folders"
+            data-testid="browse-dir"
+          >
+            <FolderSearch size={14} /> Browse…
+          </button>
+          <button
+            onClick={() => addDir()}
             disabled={!newDir.trim()}
             className="flex items-center gap-1.5 bg-gray-700 hover:bg-gray-600 disabled:opacity-40 text-white text-sm px-4 py-2.5 rounded-lg transition-colors"
           >
             <Plus size={14} /> Add
           </button>
         </div>
+        <p className="text-[11px] text-gray-600 mt-2">
+          Changes apply when you click <span className="text-gray-400">Save Settings</span>.
+        </p>
       </div>
 
       {/* Actions */}
@@ -155,6 +202,14 @@ export function SettingsPanel() {
           <RefreshCw size={14} /> Refresh Profiles
         </button>
       </div>
+
+      {browsing && (
+        <FolderBrowser
+          title="Add a profile directory"
+          onSelect={dir => addDir(dir)}
+          onClose={() => setBrowsing(false)}
+        />
+      )}
     </div>
   )
 }

@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import { api, AgentProfileInfo } from '../api'
 import { useStore } from '../store'
 import { isPlannerProfile } from '../orchestration'
-import { X, ArrowRight, ArrowLeft, Rocket } from 'lucide-react'
+import { X, ArrowRight, ArrowLeft, Rocket, FolderSearch } from 'lucide-react'
+import { FolderBrowser } from './FolderBrowser'
 
 /**
  * Three small steps for someone who has never used a terminal:
@@ -20,6 +21,7 @@ export function StartRunWizard({ onClose }: { onClose: () => void }) {
   const [profiles, setProfiles] = useState<AgentProfileInfo[]>([])
   const [planner, setPlanner] = useState('')
   const [launching, setLaunching] = useState(false)
+  const [browsing, setBrowsing] = useState(false)
 
   useEffect(() => {
     api.listProfiles().then(all => {
@@ -97,13 +99,23 @@ export function StartRunWizard({ onClose }: { onClose: () => void }) {
             </label>
             <label className="block">
               <span className="text-sm text-gray-300">Project folder <span className="text-gray-500">(optional)</span></span>
-              <input
-                value={folder}
-                onChange={e => setFolder(e.target.value)}
-                placeholder={'C:\\Users\\you\\project  or  /home/you/project'}
-                className="mt-1 w-full bg-[#0f0f14] border border-gray-700 rounded-lg p-2.5 text-sm text-gray-200 focus:border-blue-500 outline-none"
-                data-testid="wizard-folder"
-              />
+              <div className="mt-1 flex gap-2">
+                <input
+                  value={folder}
+                  onChange={e => setFolder(e.target.value)}
+                  placeholder={'C:\\Users\\you\\project  or  /home/you/project'}
+                  className="flex-1 bg-[#0f0f14] border border-gray-700 rounded-lg p-2.5 text-sm text-gray-200 focus:border-blue-500 outline-none"
+                  data-testid="wizard-folder"
+                />
+                <button
+                  type="button"
+                  onClick={() => setBrowsing(true)}
+                  className="flex items-center gap-1.5 px-3 py-2 text-sm bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg shrink-0"
+                  title="Browse the server's folders"
+                >
+                  <FolderSearch size={14} /> Browse…
+                </button>
+              </div>
             </label>
           </div>
         )}
@@ -179,6 +191,14 @@ export function StartRunWizard({ onClose }: { onClose: () => void }) {
             </button>
           )}
         </div>
+
+        {browsing && (
+          <FolderBrowser
+            title="Choose the project folder"
+            onSelect={setFolder}
+            onClose={() => setBrowsing(false)}
+          />
+        )}
       </div>
     </div>
   )
