@@ -124,6 +124,8 @@ export function RunBoard() {
   const [viewing, setViewing] = useState<RunMember | null>(null)
   const [answering, setAnswering] = useState<RunMember | null>(null)
   const [answerText, setAnswerText] = useState('')
+  const [instructing, setInstructing] = useState<Run | null>(null)
+  const [instructText, setInstructText] = useState('')
   const [prompt, setPrompt] = useState<string>('')
   const fetchingRef = useRef(false)
   const seededRef = useRef<Set<string>>(new Set())
@@ -190,12 +192,13 @@ export function RunBoard() {
     }
   }
 
-  const instruct = async (run: Run) => {
-    const text = window.prompt(`Tell the planner of "${run.runId}" what to do next:`)
-    if (!text?.trim() || !run.planner) return
+  const sendInstruction = async () => {
+    if (!instructing?.planner || !instructText.trim()) return
     try {
-      await api.sendInput(run.planner.terminalId, text.trim())
+      await api.sendInput(instructing.planner.terminalId, instructText.trim())
       showSnackbar({ type: 'success', message: 'Instruction sent to the planner' })
+      setInstructing(null)
+      setInstructText('')
     } catch (e: any) {
       showSnackbar({ type: 'error', message: e.message || 'Could not send the instruction' })
     }
@@ -238,7 +241,7 @@ export function RunBoard() {
               onDelete={id => setConfirmDelete(id)}
               onAnswer={setAnswering}
               onShow={setViewing}
-              onInstruct={instruct}
+              onInstruct={setInstructing}
             />
           ))}
         </div>
@@ -255,7 +258,7 @@ export function RunBoard() {
                 onDelete={id => setConfirmDelete(id)}
                 onAnswer={setAnswering}
                 onShow={setViewing}
-                onInstruct={instruct}
+                onInstruct={setInstructing}
               />
             ))}
           </div>
@@ -278,6 +281,44 @@ export function RunBoard() {
 
       {viewing && (
         <OutputViewer terminalId={viewing.terminalId} onClose={() => setViewing(null)} />
+      )}
+
+      {instructing && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+          <div className="bg-[#16161e] border border-gray-800 rounded-xl w-full max-w-lg p-5">
+            <h3 className="text-base font-medium text-gray-100 mb-1">
+              Tell the planner what to do next
+            </h3>
+            <p className="text-xs text-gray-500 mb-3">
+              Run {instructing.runId} — your instruction goes straight to the planner agent, which
+              will organize any follow-up work.
+            </p>
+            <textarea
+              autoFocus
+              value={instructText}
+              onChange={e => setInstructText(e.target.value)}
+              placeholder="e.g. Also add a dark-mode toggle, then have it reviewed"
+              className="w-full h-24 bg-[#0f0f14] border border-gray-700 rounded-lg p-2.5 text-sm text-gray-200 focus:border-blue-500 outline-none resize-none"
+              data-testid="instruct-text"
+            />
+            <div className="flex justify-end gap-2 mt-3">
+              <button
+                onClick={() => { setInstructing(null); setInstructText('') }}
+                className="px-3 py-2 text-sm text-gray-400 hover:text-gray-200"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={sendInstruction}
+                disabled={!instructText.trim()}
+                className="flex items-center gap-1.5 px-4 py-2 text-sm bg-blue-600 hover:bg-blue-500 text-white rounded-lg disabled:opacity-40"
+                data-testid="instruct-send"
+              >
+                <Send size={13} /> Send instruction
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {answering && (
