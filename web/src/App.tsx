@@ -5,7 +5,7 @@ import { DashboardHome } from './components/DashboardHome'
 import { AgentPanel } from './components/AgentPanel'
 import { FlowsPanel } from './components/FlowsPanel'
 import { SettingsPanel } from './components/SettingsPanel'
-import { Bot, Home, Clock, Settings, CheckCircle, XCircle, Info, Wifi, WifiOff, Play } from 'lucide-react'
+import { Bot, Home, Clock, Settings, CheckCircle, XCircle, Info, Play, Terminal as TermIcon } from 'lucide-react'
 import { RunBoard } from './components/RunBoard'
 
 type TabKey = 'runs' | 'home' | 'agents' | 'flows' | 'settings'
@@ -79,63 +79,50 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#0f0f14] text-gray-200">
-      {/* Header */}
-      <header className="border-b border-gray-800 bg-gray-900/80 backdrop-blur-sm sticky top-0 z-40">
-        <div className="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-emerald-500 to-emerald-700 flex items-center justify-center">
-              <Bot size={18} className="text-white" />
+      {/* App shell (§1.6): 56px nav — brand mark + tabs + LIVE indicator */}
+      <header className="sticky top-0 z-40" style={{ background: 'var(--card)', borderBottom: '1px solid var(--border)', height: 56 }}>
+        <div className="max-w-7xl mx-auto px-6 h-full flex items-center gap-6">
+          <div className="flex items-center gap-2.5 shrink-0">
+            <div className="flex items-center justify-center rounded-lg" style={{ width: 28, height: 28, background: 'var(--brand-deep)' }}>
+              <TermIcon size={15} className="text-white" />
             </div>
-            <h1 className="text-lg font-bold text-white">CLI Agent Orchestrator</h1>
+            <span className="font-mono font-bold" style={{ fontSize: 15, color: 'var(--t1)' }}>cao</span>
           </div>
-          <div className="flex items-center gap-4">
-            <span className="text-xs text-gray-500">{sessions.length} session{sessions.length !== 1 ? 's' : ''}</span>
-            <div className="flex items-center gap-1.5" title={connected ? 'Connected' : 'Disconnected'}>
-              {connected ? (
-                <Wifi size={14} className="text-emerald-400" />
-              ) : (
-                <WifiOff size={14} className="text-red-400" />
-              )}
-              <span className={`text-xs ${connected ? 'text-emerald-400' : 'text-red-400'}`}>
-                {connected ? 'Live' : 'Offline'}
-              </span>
-            </div>
-          </div>
-        </div>
-      </header>
-
-      {/* Tab Bar */}
-      <div className="border-b border-gray-800">
-        <div className="max-w-7xl mx-auto px-6">
-          <nav className="flex gap-1 py-2" role="tablist">
+          <nav className="flex gap-1 flex-1" role="tablist">
             {TABS.map((t, i) => (
               <button
                 key={t.key}
                 role="tab"
                 aria-selected={tab === t.key}
                 onClick={() => setTab(t.key)}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 flex items-center gap-2 ${
-                  tab === t.key
-                    ? 'bg-gradient-to-r from-emerald-600 to-emerald-500 text-white shadow-lg shadow-emerald-500/20'
-                    : 'text-gray-400 hover:text-white hover:bg-gray-800/50'
-                }`}
+                className="px-3.5 py-1.5 rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
+                style={tab === t.key
+                  ? { background: 'var(--hover)', color: 'var(--t1)' }
+                  : { color: 'var(--t3)' }}
                 title={`Alt+${i + 1}`}
               >
                 {t.icon}
                 {t.label}
                 {t.key === 'agents' && sessions.length > 0 && (
-                  <span className={`px-1.5 py-0.5 text-xs rounded-full ${tab === t.key ? 'bg-white/20' : 'bg-gray-700'}`}>
+                  <span className="px-1.5 py-0.5 text-xs rounded-full" style={{ background: 'var(--hover)', color: 'var(--t2)' }}>
                     {sessions.length}
                   </span>
                 )}
               </button>
             ))}
           </nav>
+          <div className="flex items-center gap-1.5 shrink-0" title={connected ? 'Live updates connected' : 'Disconnected'}>
+            <span className={`rounded-full ${connected ? 'pulse-dot' : ''}`}
+              style={{ width: 7, height: 7, background: connected ? 'var(--brand)' : '#f87171' }} />
+            <span className="microlabel" style={{ color: connected ? 'var(--brand)' : '#f87171' }}>
+              {connected ? 'Live' : 'Offline'}
+            </span>
+          </div>
         </div>
-      </div>
+      </header>
 
       {/* Content */}
-      <main className="max-w-7xl mx-auto px-6 py-6">
+      <main className="max-w-7xl mx-auto" style={{ padding: '28px 26px' }}>
         <ErrorBoundary>
           <Suspense fallback={<div className="text-gray-500 text-sm py-12 text-center">Loading...</div>}>
             {tab === 'runs' && <RunBoard />}

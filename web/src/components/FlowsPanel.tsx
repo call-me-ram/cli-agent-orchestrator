@@ -18,6 +18,16 @@ const SCHEDULE_PRESETS = [
 
 const CUSTOM_CRON_VALUE = '__custom__'
 
+function relUntil(iso: string): string {
+  const t = new Date(iso).getTime()
+  if (isNaN(t)) return '—'
+  const mins = Math.round((t - Date.now()) / 60_000)
+  if (mins <= 0) return 'due now'
+  if (mins < 60) return `in ${mins} m`
+  const h = Math.floor(mins / 60)
+  return h < 48 ? `in ${h} h ${mins % 60} m` : `in ${Math.floor(h / 24)} d`
+}
+
 function cronToLabel(cron: string): string {
   return SCHEDULE_PRESETS.find(p => p.cron === cron)?.label || cron
 }
@@ -166,20 +176,24 @@ export function FlowsPanel() {
 
   return (
     <div className="space-y-6">
-      {/* Flow List */}
-      <div className="bg-gray-800/60 border border-gray-700/50 rounded-xl p-5">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-sm font-semibold text-gray-300 uppercase tracking-wide">
-            Automated Flows ({flows.length})
-          </h3>
-          <button
-            onClick={() => { resetForm(); setShowCreateModal(true) }}
-            className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
-          >
-            <Plus size={14} />
-            Create Flow
-          </button>
+      {/* Page header (§5.2) */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 style={{ fontSize: 20, fontWeight: 600, color: 'var(--t1)' }}>Flows</h1>
+          <p style={{ fontSize: 13, color: 'var(--t3)' }}>
+            {flows.length} scheduled run{flows.length !== 1 ? 's' : ''} · {flows.filter(f => f.enabled).length} enabled
+          </p>
         </div>
+        <button
+          onClick={() => { resetForm(); setShowCreateModal(true) }}
+          className="flex items-center gap-2 px-4 py-2 rounded-lg text-white font-medium"
+          style={{ background: 'var(--brand-deep)', fontSize: 13.5 }}
+        >
+          <Plus size={14} /> New Flow
+        </button>
+      </div>
+
+      <div>
 
         {flows.length === 0 ? (
           <div className="text-center py-8">
@@ -192,76 +206,84 @@ export function FlowsPanel() {
         ) : (
           <div className="space-y-2">
             {flows.map(f => (
-              <div key={f.name} className="bg-gray-900/50 border border-gray-700/30 rounded-lg">
-                {/* Row header */}
+              <div key={f.name} className="rounded-xl"
+                style={{ background: 'var(--card)', border: '1px solid var(--border)', opacity: f.enabled ? 1 : 0.6 }}>
+                {/* F1 card row (§5.1): toggle · identity · schedule · next · last · actions */}
                 <div
-                  className="flex items-center justify-between p-3 cursor-pointer hover:bg-gray-800/50 transition-colors"
+                  className="flex items-center gap-4 cursor-pointer flex-wrap"
+                  style={{ padding: '16px 20px' }}
                   onClick={() => setExpanded(expanded === f.name ? null : f.name)}
                 >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <Clock size={14} className="text-gray-400 shrink-0" />
-                    <span className="text-sm text-gray-200 font-medium truncate">{f.name}</span>
-                    <span className="text-xs text-gray-500 shrink-0" title={f.schedule}>
-                      {cronToLabel(f.schedule)}
-                    </span>
-                    <span className="text-xs text-gray-500 shrink-0">{f.agent_profile}</span>
-                    {f.provider && (
-                      <span className="text-xs text-gray-600 shrink-0">{f.provider}</span>
+                  {/* 1. enable toggle */}
+                  <button
+                    onClick={e => { e.stopPropagation(); handleToggle(f) }}
+                    disabled={togglingFlow === f.name}
+                    className="relative inline-flex items-center rounded-full transition-colors shrink-0"
+                    style={{ height: 19, width: 34, background: f.enabled ? 'var(--brand-deep)' : '#4b5563' }}
+                    title={f.enabled ? 'Disable flow' : 'Enable flow'}
+                  >
+                    {togglingFlow === f.name ? (
+                      <Loader2 size={11} className="absolute left-1/2 -translate-x-1/2 animate-spin text-white" />
+                    ) : (
+                      <span className="inline-block rounded-full bg-white shadow transition-transform"
+                        style={{ height: 13, width: 13, transform: f.enabled ? 'translateX(18px)' : 'translateX(3px)' }} />
                     )}
-                    <span className={`text-xs px-2 py-0.5 rounded-full shrink-0 ${f.enabled ? 'bg-emerald-900/50 text-emerald-400' : 'bg-gray-700 text-gray-400'}`}>
-                      {f.enabled ? 'enabled' : 'disabled'}
-                    </span>
+                  </button>
+
+                  {/* 2. identity */}
+                  <div className="min-w-[200px] flex-1">
+                    <div style={{ fontSize: 14.5, fontWeight: 600, color: 'var(--t1)' }}>{f.name}</div>
+                    <div style={{ fontSize: 12, color: 'var(--t3)' }}>
+                      {f.agent_profile}{f.provider ? ` · ${f.provider}` : ''}
+                    </div>
                   </div>
 
-                  <div className="flex items-center gap-2 shrink-0 ml-3">
-                    {/* Toggle enable/disable */}
-                    <button
-                      onClick={e => { e.stopPropagation(); handleToggle(f) }}
-                      disabled={togglingFlow === f.name}
-                      className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
-                        f.enabled ? 'bg-emerald-600' : 'bg-gray-600'
-                      } ${togglingFlow === f.name ? 'opacity-50' : ''}`}
-                      title={f.enabled ? 'Disable flow' : 'Enable flow'}
-                    >
-                      {togglingFlow === f.name ? (
-                        <Loader2 size={12} className="absolute left-1/2 -translate-x-1/2 animate-spin text-white" />
-                      ) : (
-                        <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow transition-transform ${
-                          f.enabled ? 'translate-x-[18px]' : 'translate-x-[3px]'
-                        }`} />
-                      )}
-                    </button>
+                  {/* 3. schedule */}
+                  <div className="shrink-0">
+                    <div className="microlabel">Schedule</div>
+                    <div className="font-mono" style={{ fontSize: 12, color: 'var(--t2)' }} title={cronToLabel(f.schedule)}>{f.schedule}</div>
+                  </div>
 
-                    {/* Run Now */}
+                  {/* 4. next run */}
+                  <div className="shrink-0 min-w-[110px]">
+                    <div className="microlabel">Next run</div>
+                    <div className="flex items-center gap-1" style={{ fontSize: 12, color: 'var(--t2)' }}>
+                      <Clock size={11} style={{ color: 'var(--t4)' }} />
+                      {!f.enabled ? 'paused' : f.next_run ? relUntil(f.next_run) : '—'}
+                    </div>
+                  </div>
+
+                  {/* 5. last run */}
+                  <div className="shrink-0 min-w-[120px]">
+                    <div className="microlabel">Last run</div>
+                    <div style={{ fontSize: 12, color: 'var(--t4)' }}>
+                      {f.last_run ? new Date(f.last_run).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'never'}
+                    </div>
+                  </div>
+
+                  {/* 6. actions */}
+                  <div className="flex items-center gap-2 shrink-0 ml-auto">
                     <button
                       onClick={e => { e.stopPropagation(); handleRun(f) }}
                       disabled={runningFlow === f.name}
-                      className="flex items-center gap-1.5 px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-xs font-medium rounded-lg transition-colors"
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg disabled:opacity-40 transition-colors"
+                      style={{ fontSize: 12, color: 'var(--t2)', border: '1px solid var(--border)' }}
                       title="Run flow now"
                     >
-                      {runningFlow === f.name ? (
-                        <Loader2 size={12} className="animate-spin" />
-                      ) : (
-                        <Play size={12} />
-                      )}
-                      {runningFlow === f.name ? 'Running...' : 'Run Now'}
+                      {runningFlow === f.name ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />}
+                      {runningFlow === f.name ? 'Running…' : 'Run now'}
                     </button>
-
-                    {/* Delete */}
                     <button
                       onClick={e => { e.stopPropagation(); setPendingDelete(f) }}
-                      className="p-1.5 text-gray-500 hover:text-red-400 transition-colors rounded"
+                      className="p-1.5 rounded transition-colors"
+                      style={{ color: 'var(--t4)' }}
                       title="Delete flow"
                     >
                       <Trash2 size={14} />
                     </button>
-
-                    {/* Expand chevron */}
-                    {expanded === f.name ? (
-                      <ChevronDown size={14} className="text-gray-500" />
-                    ) : (
-                      <ChevronRight size={14} className="text-gray-500" />
-                    )}
+                    {expanded === f.name
+                      ? <ChevronDown size={14} style={{ color: 'var(--t4)' }} />
+                      : <ChevronRight size={14} style={{ color: 'var(--t4)' }} />}
                   </div>
                 </div>
 

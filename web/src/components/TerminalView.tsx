@@ -6,13 +6,14 @@ import { X, Terminal as TermIcon } from 'lucide-react'
 
 interface TerminalViewProps {
   model?: string | null
+  inline?: boolean
   terminalId: string
   provider?: string
   agentProfile?: string | null
   onClose: () => void
 }
 
-export function TerminalView({ terminalId, provider, agentProfile, model, onClose }: TerminalViewProps) {
+export function TerminalView({ terminalId, provider, agentProfile, model, inline = false, onClose }: TerminalViewProps) {
   const containerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -121,7 +122,10 @@ export function TerminalView({ terminalId, provider, agentProfile, model, onClos
   }, [terminalId])
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col" style={{ background: '#0d1117' }}>
+    <div
+      className={inline ? 'flex flex-col h-full rounded-lg overflow-hidden' : 'fixed inset-0 z-50 flex flex-col'}
+      style={{ background: '#0a0a0e', ...(inline ? { border: '1px solid var(--border)' } : {}) }}
+    >
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-2 bg-gray-900 border-b border-gray-700/50 shrink-0">
         <div className="flex items-center gap-3">

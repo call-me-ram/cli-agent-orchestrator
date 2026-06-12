@@ -6,34 +6,41 @@ import { ConfirmModal } from '../components/ConfirmModal'
 import { FALLBACK_PROVIDERS } from '../components/AgentPanel'
 
 describe('StatusBadge', () => {
+  it('renders plain-language labels for the Runs surface', () => {
+    render(<StatusBadge status="PROCESSING" technical={false} />)
+    expect(screen.getByText('Working')).toBeInTheDocument()
+    render(<StatusBadge status="WAITING_USER_ANSWER" technical={false} />)
+    expect(screen.getByText('Needs you')).toBeInTheDocument()
+  })
+
   it('renders idle status', () => {
     render(<StatusBadge status="idle" />)
-    expect(screen.getByText('Idle')).toBeInTheDocument()
+    expect(screen.getByText('IDLE')).toBeInTheDocument()
   })
 
   it('renders processing status', () => {
     render(<StatusBadge status="processing" />)
-    expect(screen.getByText('Processing')).toBeInTheDocument()
+    expect(screen.getByText('PROCESSING')).toBeInTheDocument()
   })
 
   it('renders completed status', () => {
     render(<StatusBadge status="completed" />)
-    expect(screen.getByText('Completed')).toBeInTheDocument()
+    expect(screen.getByText('COMPLETED')).toBeInTheDocument()
   })
 
   it('renders error status', () => {
     render(<StatusBadge status="error" />)
-    expect(screen.getByText('Error')).toBeInTheDocument()
+    expect(screen.getByText('ERROR')).toBeInTheDocument()
   })
 
   it('renders waiting_user_answer status', () => {
     render(<StatusBadge status="waiting_user_answer" />)
-    expect(screen.getByText('Awaiting Input')).toBeInTheDocument()
+    expect(screen.getByText('WAITING_USER_ANSWER')).toBeInTheDocument()
   })
 
   it('renders null status as unknown', () => {
     render(<StatusBadge status={null} />)
-    expect(screen.getByText('Unknown')).toBeInTheDocument()
+    expect(screen.getByText('UNKNOWN')).toBeInTheDocument()
   })
 })
 
