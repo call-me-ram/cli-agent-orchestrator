@@ -32,6 +32,10 @@ TOOL_MAPPING: Dict[str, Dict[str, List[str]]] = {
         "fs_write": ["Edit", "Write", "NotebookEdit"],
         "fs_list": ["Glob", "Grep"],
         "fs_*": ["Read", "Edit", "Write", "NotebookEdit", "Glob", "Grep"],
+        # Network egress. Only meaningful as a NEW capability for agents
+        # without execute_bash (Bash can curl anyway); a read-only reviewer
+        # without web_fetch can no longer exfiltrate via WebFetch/WebSearch.
+        "web_fetch": ["WebFetch", "WebSearch"],
     },
     "copilot_cli": {
         "execute_bash": ["shell"],
@@ -53,6 +57,7 @@ TOOL_MAPPING: Dict[str, Dict[str, List[str]]] = {
             "search_file_content",
             "glob",
         ],
+        "web_fetch": ["web_fetch", "google_web_search"],
     },
 }
 

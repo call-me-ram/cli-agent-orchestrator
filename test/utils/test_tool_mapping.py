@@ -81,9 +81,9 @@ class TestGetDisallowedTools:
         assert "Write" in result
 
     def test_claude_code_developer_allows_all(self):
-        """Developer with fs_* and execute_bash should not block anything."""
+        """Developer with fs_*, execute_bash, and web_fetch blocks nothing."""
         result = get_disallowed_tools(
-            "claude_code", ["@builtin", "fs_*", "execute_bash", "@cao-mcp-server"]
+            "claude_code", ["@builtin", "fs_*", "execute_bash", "web_fetch", "@cao-mcp-server"]
         )
         assert result == []
 
@@ -158,10 +158,28 @@ class TestClaudeCodeSubagentEscape:
 
     def test_developer_with_bash_keeps_task(self):
         disallowed = get_disallowed_tools(
-            "claude_code", ["@builtin", "fs_*", "execute_bash", "@cao-mcp-server"]
+            "claude_code", ["@builtin", "fs_*", "execute_bash", "web_fetch", "@cao-mcp-server"]
         )
         assert "Task" not in disallowed
         assert disallowed == []
 
     def test_unrestricted_star_keeps_everything(self):
         assert get_disallowed_tools("claude_code", ["*"]) == []
+
+    def test_reviewer_without_web_fetch_blocks_network_egress(self):
+        """A read-only reviewer has no egress channel: WebFetch/WebSearch are
+        blocked alongside Bash (its curl path)."""
+        disallowed = get_disallowed_tools("claude_code", ["fs_read", "fs_list"])
+        assert "WebFetch" in disallowed
+        assert "WebSearch" in disallowed
+        assert "Bash" in disallowed
+
+    def test_web_fetch_grant_unblocks_egress_tools(self):
+        disallowed = get_disallowed_tools("claude_code", ["fs_read", "fs_list", "web_fetch"])
+        assert "WebFetch" not in disallowed
+        assert "WebSearch" not in disallowed
+
+    def test_gemini_web_fetch_mapping(self):
+        disallowed = get_disallowed_tools("gemini_cli", ["fs_read"])
+        assert "web_fetch" in disallowed
+        assert "google_web_search" in disallowed

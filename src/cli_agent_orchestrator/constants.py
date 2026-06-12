@@ -323,9 +323,13 @@ MEMORY_SCOPE_BUDGET_CHARS = 1000
 # Users can define custom roles in settings.json under "roles".
 # CAO vocabulary: execute_bash, fs_read, fs_write, fs_list, fs_*, @builtin, @cao-mcp-server
 ROLE_TOOL_DEFAULTS = {
+    # supervisor/reviewer deliberately lack web_fetch AND execute_bash: with
+    # WebFetch/WebSearch now gated behind web_fetch, they have no network
+    # egress channel at all. developer keeps web_fetch explicitly — it has
+    # execute_bash anyway (curl), so blocking WebFetch there adds nothing.
     "supervisor": ["@cao-mcp-server", "fs_read", "fs_list"],
     "reviewer": ["@builtin", "fs_read", "fs_list", "@cao-mcp-server"],
-    "developer": ["@builtin", "fs_*", "execute_bash", "@cao-mcp-server"],
+    "developer": ["@builtin", "fs_*", "execute_bash", "web_fetch", "@cao-mcp-server"],
 }
 
 # Security constraints prepended to system prompts for providers without
