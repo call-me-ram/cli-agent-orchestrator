@@ -38,8 +38,8 @@ def _registered_providers():
     terminals are 'live' unless a test says otherwise.
     """
     with patch(
-        "cli_agent_orchestrator.services.terminal_service.provider_manager.get_provider",
-        return_value=MagicMock(),
+        "cli_agent_orchestrator.services.terminal_service.provider_manager.has_provider",
+        return_value=True,
     ):
         yield
 
@@ -104,8 +104,8 @@ class TestCountActiveWorkers:
         """Stale DB rows (no provider in this process) are invisible to the cap."""
         with (
             patch(
-                "cli_agent_orchestrator.services.terminal_service.provider_manager.get_provider",
-                return_value=None,
+                "cli_agent_orchestrator.services.terminal_service.provider_manager.has_provider",
+                return_value=False,
             ),
             patch(
                 "cli_agent_orchestrator.services.terminal_service.load_agent_profile",

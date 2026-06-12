@@ -136,6 +136,13 @@ class ProviderManager:
             )
             raise
 
+    def has_provider(self, terminal_id: str) -> bool:
+        """Passive registration check: True only if a provider object already
+        lives in THIS process. Unlike get_provider it never creates one
+        on-demand from DB metadata — stale DB rows stay invisible. Used by
+        the concurrency cap, which must count live workers, not history."""
+        return terminal_id in self._providers
+
     def get_provider(self, terminal_id: str) -> Optional[BaseProvider]:
         """Get provider instance, creating on-demand if not found.
 

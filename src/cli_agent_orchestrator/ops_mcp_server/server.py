@@ -510,10 +510,16 @@ async def get_terminal_result(
         files_changed, git_diff_stat, git_diff (+ git_diff_truncated), and
         manifest — or {"success": False, "message": ...} on error
     """
-    data, error = _request_json(
-        "get",
-        f"/terminals/{terminal_id}/result",
-        operation=f"Get terminal result for '{terminal_id}'",
+    # to_thread + explicit timeout: the server side runs several git
+    # subprocesses; a sync call here would pin the MCP event loop meanwhile.
+    data, error = await asyncio.to_thread(
+        functools.partial(
+            _request_json,
+            "get",
+            f"/terminals/{terminal_id}/result",
+            operation=f"Get terminal result for '{terminal_id}'",
+            timeout=(5.0, 180.0),
+        )
     )
     if error:
         return {"success": False, "message": error}

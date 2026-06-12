@@ -161,7 +161,9 @@ def _count_active_workers(terminals: list) -> int:
     """
     count = 0
     for terminal in terminals:
-        if provider_manager.get_provider(terminal["id"]) is None:
+        # Passive lookup only: get_provider would auto-CREATE a provider from
+        # the DB row, making every stale row count (and resurrecting it).
+        if not provider_manager.has_provider(terminal["id"]):
             continue
         profile_name = terminal.get("agent_profile") or ""
         if profile_name == "memory_manager":
@@ -172,24 +174,41 @@ def _count_active_workers(terminals: list) -> int:
                 continue
         except Exception:
             pass
-        if status_monitor.get_status(terminal["id"]) in (
-            TerminalStatus.COMPLETED,
-            TerminalStatus.ERROR,
-        ):
-            continue
+        try:
+            if status_monitor.get_status(terminal["id"]) in (
+                TerminalStatus.COMPLETED,
+                TerminalStatus.ERROR,
+            ):
+                continue
+        except Exception:
+            continue  # concurrently deleted — not an active worker
         count += 1
     return count
 
 
-def _enforce_worker_cap(session_name: str) -> None:
-    """Reject worker creation that would exceed the per-session or global cap."""
-    session_active = _count_active_workers(list_terminals_by_session(session_name))
-    if session_active >= MAX_WORKERS_PER_SESSION:
-        raise ConcurrencyCapExceededError(
-            f"Session '{session_name}' already has {session_active} active workers "
-            f"(cap {MAX_WORKERS_PER_SESSION}). Wait for a worker to finish, shut down "
-            f"idle workers, or raise CAO_MAX_WORKERS_PER_SESSION."
-        )
+def _is_supervisor_profile(agent_profile: str) -> bool:
+    """Best-effort role check; unknown/unloadable profiles count as workers."""
+    try:
+        profile = load_agent_profile(agent_profile)
+        return (profile.role or "").lower() == "supervisor"
+    except Exception:
+        return False
+
+
+def _enforce_worker_cap(session_name: "str | None") -> None:
+    """Reject worker creation that would exceed the per-session or global cap.
+
+    ``session_name=None`` checks only the global cap (a worker arriving as a
+    brand-new session, e.g. via the ops-mcp launch_session driver path).
+    """
+    if session_name is not None:
+        session_active = _count_active_workers(list_terminals_by_session(session_name))
+        if session_active >= MAX_WORKERS_PER_SESSION:
+            raise ConcurrencyCapExceededError(
+                f"Session '{session_name}' already has {session_active} active workers "
+                f"(cap {MAX_WORKERS_PER_SESSION}). Wait for a worker to finish, shut down "
+                f"idle workers, or raise CAO_MAX_WORKERS_PER_SESSION."
+            )
     global_active = _count_active_workers(list_all_terminals())
     if global_active >= MAX_CONCURRENT_WORKERS:
         raise ConcurrencyCapExceededError(
@@ -197,6 +216,36 @@ def _enforce_worker_cap(session_name: str) -> None:
             f"(cap {MAX_CONCURRENT_WORKERS}). Wait for workers to finish or raise "
             f"CAO_MAX_CONCURRENT_WORKERS."
         )
+
+
+async def _maybe_isolate_in_worktree(
+    provider: str, agent_profile: str, terminal_id: str, working_directory: "str | None"
+) -> "str | None":
+    """Provision a per-worker git worktree; returns the worker's new cwd.
+
+    Returns None when isolation doesn't apply (flag off, no/non-repo cwd,
+    kimi_cli's temp-dir behavior) or provisioning fails — callers fall back
+    to the shared directory. A worker launched in a repo SUBDIRECTORY lands
+    in the same subdirectory of its worktree.
+    """
+    if not (ENABLE_GIT_WORKTREE and working_directory and provider != ProviderType.KIMI_CLI.value):
+        return None
+    try:
+        if not await asyncio.to_thread(git_worktree_service.is_git_repo, working_directory):
+            return None
+        worktree_path, branch = await asyncio.to_thread(
+            git_worktree_service.create_worktree, working_directory, terminal_id, agent_profile
+        )
+        prefix = await asyncio.to_thread(git_worktree_service.relative_prefix, working_directory)
+        target = str(Path(worktree_path) / prefix) if prefix else worktree_path
+        logger.info(f"Worker {terminal_id} isolated in worktree {target} (branch {branch})")
+        return target
+    except Exception as e:
+        logger.warning(
+            f"Worktree provisioning failed for {terminal_id}; "
+            f"falling back to shared directory {working_directory}: {e}"
+        )
+        return None
 
 
 async def create_terminal(
@@ -262,6 +311,19 @@ async def create_terminal(
             # may have left behind, so a no-env relaunch can't inherit them.
             clear_session_env(session_name)
 
+            # Governance applies to WORKERS regardless of arrival path: a
+            # worker spawned as its own session (the ops-mcp launch_session
+            # driver does this) gets the same global cap and worktree
+            # isolation as one added to an existing session. Supervisors and
+            # the memory sidecar are exempt.
+            if agent_profile != "memory_manager" and not _is_supervisor_profile(agent_profile):
+                await asyncio.to_thread(_enforce_worker_cap, None)
+                isolated = await _maybe_isolate_in_worktree(
+                    provider, agent_profile, terminal_id, working_directory
+                )
+                if isolated:
+                    working_directory = isolated
+
             # Create new tmux session with initial window
             get_backend().create_session(
                 session_name,
@@ -281,41 +343,16 @@ async def create_terminal(
             # Add window to existing session
             if not get_backend().session_exists(session_name):
                 raise ValueError(f"Session '{session_name}' not found")
-            # Workers (not the memory_manager sidecar) count against the
-            # orchestration concurrency caps. Enforced before any backend
-            # resource is created so a rejection has nothing to clean up.
-            if agent_profile != "memory_manager":
+            # Worker governance: concurrency caps (enforced before any
+            # backend resource is created so a rejection has nothing to
+            # clean up) and per-worker git worktree isolation.
+            if agent_profile != "memory_manager" and not _is_supervisor_profile(agent_profile):
                 await asyncio.to_thread(_enforce_worker_cap, session_name)
-
-            # Git worktree isolation: give this worker its own worktree +
-            # branch instead of sharing the supervisor's checkout, so
-            # parallel workers can never collide on files. Best-effort —
-            # any failure falls back to the shared directory. kimi_cli is
-            # excluded (it runs inside its own temp dir, not the cwd).
-            if (
-                ENABLE_GIT_WORKTREE
-                and working_directory
-                and agent_profile != "memory_manager"
-                and provider != ProviderType.KIMI_CLI.value
-            ):
-                try:
-                    if await asyncio.to_thread(git_worktree_service.is_git_repo, working_directory):
-                        worktree_path, branch = await asyncio.to_thread(
-                            git_worktree_service.create_worktree,
-                            working_directory,
-                            terminal_id,
-                            agent_profile,
-                        )
-                        logger.info(
-                            f"Worker {terminal_id} isolated in worktree {worktree_path} "
-                            f"(branch {branch})"
-                        )
-                        working_directory = worktree_path
-                except Exception as e:
-                    logger.warning(
-                        f"Worktree provisioning failed for {terminal_id}; "
-                        f"falling back to shared directory {working_directory}: {e}"
-                    )
+                isolated = await _maybe_isolate_in_worktree(
+                    provider, agent_profile, terminal_id, working_directory
+                )
+                if isolated:
+                    working_directory = isolated
             window_name = get_backend().create_window(
                 session_name,
                 window_name,
@@ -467,6 +504,14 @@ async def create_terminal(
             provider_manager.cleanup_provider(terminal_id)
         except Exception:
             pass  # Ignore cleanup errors
+        try:
+            # A worktree provisioned before the failure (e.g. provider init
+            # timeout) would otherwise leak a full checkout + branch forever:
+            # terminal IDs are never reused and delete_terminal never runs
+            # for a terminal that failed to create.
+            git_worktree_service.remove_worktree(terminal_id)
+        except Exception:
+            pass  # Ignore cleanup errors
         if session_created and session_name:
             try:
                 get_backend().kill_session(session_name)
@@ -560,38 +605,62 @@ def get_result(terminal_id: str) -> Dict:
     """Structured file/git-based result for a worker terminal.
 
     The trustworthy review surface for orchestration: real git state from the
-    worker's working directory (branch, changed files, diff vs HEAD) plus an
-    optional worker-written manifest (``.cao/result.json`` convention),
-    instead of text scraped from the worker's TUI. The scrape path
-    (get_output mode=last) remains available as a narrative complement.
+    worker's working directory (branch, changed files, diff vs HEAD, and the
+    content of untracked files — new modules are a worker's most common
+    output and ``git diff`` alone misses them) plus an optional
+    worker-written manifest, instead of text scraped from the worker's TUI.
+    The scrape path (get_output mode=last) remains the narrative complement.
+
+    ``shared_working_directory`` is True when the directory is NOT a
+    CAO-provisioned worktree for this terminal: there the diff/manifest mixes
+    every co-located agent's changes, and the supervisor must treat it as a
+    snapshot of the directory, not this worker's isolated output. The
+    manifest is read from ``.cao/result-<terminal_id>.json`` first;
+    ``.cao/result.json`` is honored only in an isolated worktree (in a
+    shared directory it could be another worker's).
 
     Raises:
         ValueError: If the terminal is not found.
     """
     import json as json_module
 
+    from cli_agent_orchestrator.constants import WORKTREES_DIR
+
     working_dir = get_working_directory(terminal_id)
+    shared = True
+    if working_dir:
+        try:
+            resolved = Path(working_dir).resolve()
+            shared = not resolved.is_relative_to((WORKTREES_DIR / terminal_id).resolve())
+        except OSError:
+            pass
     result: Dict = {
         "terminal_id": terminal_id,
         "status": status_monitor.get_status(terminal_id).value,
         "working_directory": working_dir,
+        "shared_working_directory": shared,
         "is_git_repo": False,
         "branch": None,
         "files_changed": [],
         "git_diff_stat": None,
         "git_diff": None,
         "git_diff_truncated": False,
+        "untracked_files": [],
         "manifest": None,
     }
     if not working_dir:
         return result
 
-    manifest_path = Path(working_dir) / ".cao" / "result.json"
-    try:
-        if manifest_path.is_file() and manifest_path.stat().st_size <= 65536:
-            result["manifest"] = json_module.loads(manifest_path.read_text())
-    except Exception as e:
-        logger.warning(f"Unreadable result manifest for {terminal_id}: {e}")
+    for candidate in (f"result-{terminal_id}.json", "result.json" if not shared else None):
+        if candidate is None:
+            continue
+        manifest_path = Path(working_dir) / ".cao" / candidate
+        try:
+            if manifest_path.is_file() and manifest_path.stat().st_size <= 65536:
+                result["manifest"] = json_module.loads(manifest_path.read_text())
+                break
+        except Exception as e:
+            logger.warning(f"Unreadable result manifest for {terminal_id}: {e}")
 
     inside = _git(working_dir, "rev-parse", "--is-inside-work-tree")
     if inside is None or inside.strip() != "true":
@@ -618,6 +687,21 @@ def get_result(terminal_id: str) -> Dict:
             result["git_diff_truncated"] = True
         else:
             result["git_diff"] = diff
+
+    # Untracked files: include their content (capped per file and in total)
+    # so a reviewer actually sees brand-new modules, not just `??` paths.
+    budget = GIT_DIFF_MAX_CHARS
+    for entry in result["files_changed"]:
+        if entry["state"] != "??" or budget <= 0:
+            continue
+        file_path = Path(working_dir) / entry["path"]
+        try:
+            if file_path.is_file() and file_path.stat().st_size <= 1_000_000:
+                content = file_path.read_text(errors="replace")[: min(50_000, budget)]
+                budget -= len(content)
+                result["untracked_files"].append({"path": entry["path"], "content": content})
+        except Exception:
+            continue
     return result
 
 

@@ -647,6 +647,7 @@ class TestTerminalMonitoringTools:
             "http://127.0.0.1:9889/terminals/term-123/result",
             params=None,
             json=None,
+            timeout=(5.0, 180.0),
         )
 
     async def test_get_terminal_result_returns_failure_for_not_found(self) -> None:

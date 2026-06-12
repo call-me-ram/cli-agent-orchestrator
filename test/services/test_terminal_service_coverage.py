@@ -11,6 +11,22 @@ import pytest
 from cli_agent_orchestrator.models.agent_profile import AgentProfile
 
 
+@pytest.fixture(autouse=True)
+def _no_worker_governance():
+    """Cap + worktree governance read global DB/process state and have their
+    own test modules; neutralize them for these workflow tests."""
+    from unittest.mock import patch as _patch
+
+    with (
+        _patch("cli_agent_orchestrator.services.terminal_service._enforce_worker_cap"),
+        _patch(
+            "cli_agent_orchestrator.services.terminal_service._is_supervisor_profile",
+            return_value=False,
+        ),
+    ):
+        yield
+
+
 class TestCreateTerminalCleanup:
     """Test error cleanup paths in create_terminal."""
 

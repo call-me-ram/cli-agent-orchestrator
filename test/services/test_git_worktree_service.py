@@ -96,15 +96,42 @@ class TestRemoveWorktree:
         ).stdout
         assert branch in branches  # unmerged work survives
 
-    def test_removes_dirty_worktree(self, repo, worktrees_dir):
-        path, _ = git_worktree_service.create_worktree(str(repo), TERMINAL_ID, "dev")
+    def test_dirty_worktree_is_snapshotted_before_removal(self, repo, worktrees_dir):
+        """Uncommitted AND untracked worker output survives on the branch —
+        without the auto-snapshot, removal silently destroyed it."""
+        path, branch = git_worktree_service.create_worktree(str(repo), TERMINAL_ID, "dev")
         (worktrees_dir / TERMINAL_ID / "app.py").write_text("uncommitted edit\n")
+        (worktrees_dir / TERMINAL_ID / "brand_new.py").write_text("x = 99\n")
 
         assert git_worktree_service.remove_worktree(TERMINAL_ID) is True
         assert not (worktrees_dir / TERMINAL_ID).exists()
 
+        show = lambda f: subprocess.run(  # noqa: E731
+            ["git", "-C", str(repo), "show", f"{branch}:{f}"],
+            capture_output=True,
+            text=True,
+        ).stdout
+        assert show("app.py") == "uncommitted edit\n"
+        assert show("brand_new.py") == "x = 99\n"
+
+    def test_marker_file_cleaned_up(self, repo, worktrees_dir):
+        git_worktree_service.create_worktree(str(repo), TERMINAL_ID, "dev")
+        assert (worktrees_dir / f"{TERMINAL_ID}.repo").read_text() == str(repo)
+        git_worktree_service.remove_worktree(TERMINAL_ID)
+        assert not (worktrees_dir / f"{TERMINAL_ID}.repo").exists()
+
     def test_no_worktree_returns_false(self, worktrees_dir):
         assert git_worktree_service.remove_worktree("eeee9999") is False
+
+
+class TestRelativePrefix:
+    def test_repo_root_has_empty_prefix(self, repo):
+        assert git_worktree_service.relative_prefix(str(repo)) == ""
+
+    def test_subdirectory_prefix_preserved(self, repo):
+        sub = repo / "packages" / "api"
+        sub.mkdir(parents=True)
+        assert git_worktree_service.relative_prefix(str(sub)) == "packages/api"
 
 
 class TestCreateTerminalIntegration:

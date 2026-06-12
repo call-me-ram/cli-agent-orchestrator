@@ -69,15 +69,38 @@ class TestGetResult:
         assert result["files_changed"] == []
         assert result["git_diff"] == ""
 
-    def test_manifest_is_read_when_present(self, git_repo):
+    def test_namespaced_manifest_is_read_in_shared_directory(self, git_repo):
+        """In a shared directory only the per-terminal manifest is trusted."""
         manifest = {"summary": "implemented foo()", "status": "done"}
         cao_dir = git_repo / ".cao"
         cao_dir.mkdir()
-        (cao_dir / "result.json").write_text(json.dumps(manifest))
+        (cao_dir / f"result-{TERMINAL_ID}.json").write_text(json.dumps(manifest))
+        (cao_dir / "result.json").write_text(json.dumps({"summary": "someone else's"}))
 
         with _patch_cwd(git_repo), _patch_status():
             result = terminal_service.get_result(TERMINAL_ID)
         assert result["manifest"] == manifest
+        assert result["shared_working_directory"] is True
+
+    def test_generic_manifest_ignored_in_shared_directory(self, git_repo):
+        """A bare result.json could be another worker's — ignored when shared."""
+        cao_dir = git_repo / ".cao"
+        cao_dir.mkdir()
+        (cao_dir / "result.json").write_text(json.dumps({"summary": "ambiguous"}))
+
+        with _patch_cwd(git_repo), _patch_status():
+            result = terminal_service.get_result(TERMINAL_ID)
+        assert result["manifest"] is None
+
+    def test_untracked_file_content_is_included(self, git_repo):
+        """New modules (untracked) must be reviewable, not just listed as ??."""
+        (git_repo / "brand_new.py").write_text("def fresh(): return 42\n")
+
+        with _patch_cwd(git_repo), _patch_status():
+            result = terminal_service.get_result(TERMINAL_ID)
+        assert result["untracked_files"] == [
+            {"path": "brand_new.py", "content": "def fresh(): return 42\n"}
+        ]
 
     def test_non_git_directory_degrades_gracefully(self, tmp_path):
         with _patch_cwd(tmp_path), _patch_status():

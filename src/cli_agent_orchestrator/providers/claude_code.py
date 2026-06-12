@@ -361,13 +361,16 @@ class ClaudeCodeProvider(BaseProvider):
         # drives wait_until_status; it only fires once the provider's own
         # get_status returns IDLE/COMPLETED on Claude-rendered content, so the
         # old stale-zsh-prompt false-IDLE guard is no longer needed.
+        # 60s: cold starts with large --append-system-prompt profiles (e.g.
+        # code_supervisor) repeatedly exceeded 30s on WSL — observed live as
+        # systematic POST /sessions 500s from the run wizard.
         if not await wait_until_status(
             self.terminal_id,
             {TerminalStatus.IDLE, TerminalStatus.COMPLETED},
-            timeout=30.0,
+            timeout=60.0,
             polling_interval=1.0,
         ):
-            raise TimeoutError("Claude Code initialization timed out after 30 seconds")
+            raise TimeoutError("Claude Code initialization timed out after 60 seconds")
 
         self._initialized = True
         return True
