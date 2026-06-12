@@ -2,8 +2,24 @@ import { useState, useEffect, useRef } from 'react'
 import { api } from '../api'
 import { X, RefreshCw, Copy, Check, FileText, Loader2 } from 'lucide-react'
 
-function stripAnsi(text: string): string {
-  return text.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').replace(/\x1b\][^\x07]*\x07/g, '')
+export function stripAnsi(text: string): string {
+  return (
+    text
+      // OSC (hyperlinks, titles): ESC ] ... terminated by BEL or ST (ESC \\).
+      // Claude's TUI wraps file names in OSC-8 hyperlinks, which leaked as
+      // \u241b]8;id=...;file://...\u241b\\ before ST termination was handled here.
+      .replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, '')
+      // CSI per ECMA-48: ESC [ <params> <intermediates> <final>. The [0-?]
+      // param class includes the private '?' - cursor show/hide (?25h/l)
+      // previously slipped through a [0-9;]-only pattern.
+      .replace(/(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]/g, '')
+      // Any other ESC-prefixed sequence, and stray ESC bytes.
+      .replace(/\x1b[@-_]?/g, '')
+      // Carriage returns -> newlines; drop remaining control chars (keep tab/newline).
+      .replace(/\r\n?/g, '\n')
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g, '')
+  )
 }
 
 interface OutputViewerProps {
