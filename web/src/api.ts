@@ -5,7 +5,16 @@ async function fetchJSON<T>(url: string, opts?: RequestInit & { timeoutMs?: numb
   const timeout = setTimeout(() => controller.abort(), opts?.timeoutMs ?? 10000)
   try {
     const res = await fetch(`${BASE}${url}`, { ...opts, signal: controller.signal })
-    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+    if (!res.ok) {
+      // Surface the API's human-readable detail ("Folder does not exist: ...")
+      // instead of an opaque "500 Internal Server Error".
+      let detail = ''
+      try {
+        const body = await res.json()
+        if (typeof body?.detail === 'string') detail = body.detail
+      } catch { /* non-JSON error body */ }
+      throw new Error(detail || `${res.status} ${res.statusText}`)
+    }
     return res.json()
   } finally {
     clearTimeout(timeout)

@@ -100,7 +100,7 @@ export function StartRunWizard({ onClose }: { onClose: () => void }) {
               <input
                 value={folder}
                 onChange={e => setFolder(e.target.value)}
-                placeholder="/path/to/your/project"
+                placeholder={'C:\\Users\\you\\project  or  /home/you/project'}
                 className="mt-1 w-full bg-[#0f0f14] border border-gray-700 rounded-lg p-2.5 text-sm text-gray-200 focus:border-blue-500 outline-none"
                 data-testid="wizard-folder"
               />

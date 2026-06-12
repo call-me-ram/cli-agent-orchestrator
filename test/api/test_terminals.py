@@ -97,7 +97,7 @@ class TestSessionCreationWithWorkingDirectory:
             assert call_kwargs.get("working_directory") == str(tmp_path)
             assert call_kwargs.get("registry") is not None
 
-    def test_create_session_with_working_directory(self, client):
+    def test_create_session_with_working_directory(self, client, tmp_path):
         """Test POST /sessions with working_directory parameter."""
         with patch("cli_agent_orchestrator.api.main.session_service") as mock_svc:
             mock_svc.create_session = AsyncMock(
@@ -115,13 +115,13 @@ class TestSessionCreationWithWorkingDirectory:
                 params={
                     "provider": "q_cli",
                     "agent_profile": "developer",
-                    "working_directory": "/custom/path",
+                    "working_directory": str(tmp_path),
                 },
             )
 
             assert response.status_code == 201
             call_kwargs = mock_svc.create_session.call_args.kwargs
-            assert call_kwargs.get("working_directory") == "/custom/path"
+            assert call_kwargs.get("working_directory") == str(tmp_path)
 
 
 class TestTerminalCreationWithWorkingDirectory:
@@ -159,7 +159,7 @@ class TestTerminalCreationWithWorkingDirectory:
             call_kwargs = mock_svc.create_terminal.call_args.kwargs
             assert call_kwargs.get("working_directory") == str(tmp_path)
 
-    def test_create_terminal_in_session_with_working_directory(self, client):
+    def test_create_terminal_in_session_with_working_directory(self, client, tmp_path):
         """Test POST /sessions/{session}/terminals with working_directory."""
         with (
             patch(
@@ -183,13 +183,13 @@ class TestTerminalCreationWithWorkingDirectory:
                 params={
                     "provider": "q_cli",
                     "agent_profile": "analyst",
-                    "working_directory": "/session/path",
+                    "working_directory": str(tmp_path),
                 },
             )
 
             assert response.status_code == 201
             call_kwargs = mock_svc.create_terminal.call_args.kwargs
-            assert call_kwargs.get("working_directory") == "/session/path"
+            assert call_kwargs.get("working_directory") == str(tmp_path)
 
 
 class TestExitTerminalEndpoint:

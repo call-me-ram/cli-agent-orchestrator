@@ -85,6 +85,7 @@ from cli_agent_orchestrator.services.terminal_service import (
 from cli_agent_orchestrator.utils.agent_profiles import load_agent_profile, resolve_provider
 from cli_agent_orchestrator.utils.event import terminal_id_from_topic
 from cli_agent_orchestrator.utils.logging import setup_logging
+from cli_agent_orchestrator.utils.paths import normalize_working_directory
 from cli_agent_orchestrator.utils.skills import (
     SkillNameError,
     load_skill_content,
@@ -552,6 +553,10 @@ async def create_session(
                 else f"{SESSION_PREFIX}{session_name}"
             )
             validate_tmux_name(effective, "session_name")
+        # Normalize operator-supplied paths (Windows->WSL translation, quote
+        # stripping, auto-create). ValueError -> 400 with a human message
+        # instead of an opaque 500 from deep inside tmux.
+        working_directory = normalize_working_directory(working_directory)
         # Parse comma-separated allowed_tools string into list
         allowed_tools_list = allowed_tools.split(",") if allowed_tools else None
 
@@ -661,6 +666,7 @@ async def create_terminal_in_session(
     """Create additional terminal in existing session."""
     try:
         validate_tmux_name(session_name, "session_name")
+        working_directory = normalize_working_directory(working_directory)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     try:
