@@ -175,6 +175,22 @@ class StatusMonitor:
         # re-enter StatusMonitor while the latch state is mid-update.
         bus.publish(f"terminal.{terminal_id}.status", {"status": detected.value})
         logger.info(f"Terminal {terminal_id} status changed: {detected.value}")
+        # A status transition IS activity: keep last_active honest for
+        # autonomous runs where nobody sends manual input for hours (the UI
+        # previously showed "Active 6h ago" on a busy session).
+        try:
+            from cli_agent_orchestrator.clients.database import update_last_active
+
+            update_last_active(terminal_id)
+        except Exception:
+            pass
+
+    def seed_status(self, terminal_id: str, status: TerminalStatus) -> None:
+        """Seed a freshly detected status through the normal latch/publish
+        path. Used after a server restart re-attaches a SILENT terminal: an
+        idle agent produces no output, so without a seed it would read
+        UNKNOWN until its next repaint."""
+        self._apply_detection(terminal_id, status)
 
     # ----- pyte rendered-screen detection (edge-debounced) -------------------
 

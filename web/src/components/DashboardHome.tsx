@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { useStore } from '../store'
-import { api, TerminalMeta } from '../api'
+import { api, TerminalMeta , serverNow } from '../api'
 import { Bot, Zap, Package, Monitor, Terminal as TermIcon, Trash2, Mail, FileText, LogOut, Send, ChevronRight, ChevronDown, Users, Filter, ArrowDownUp } from 'lucide-react'
 import { TerminalView } from './TerminalView'
 import { ConfirmModal } from './ConfirmModal'
@@ -14,7 +14,7 @@ function fmtRel(dateStr: string | null | undefined): string | null {
   if (!dateStr) return null
   const d = new Date(dateStr)
   if (isNaN(d.getTime())) return null
-  const diff = Math.max(0, Math.floor((Date.now() - d.getTime()) / 1000))
+  const diff = Math.max(0, Math.floor((serverNow() - d.getTime()) / 1000))
   if (diff < 60) return 'just now'
   const m = Math.floor(diff / 60)
   if (m < 60) return `${m}m ago`

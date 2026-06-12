@@ -12,6 +12,7 @@ import struct
 import subprocess
 import termios
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Dict, List, Optional, cast
 
@@ -351,6 +352,23 @@ app.add_middleware(
     TrustedHostMiddleware,
     allowed_hosts=ALLOWED_HOSTS,
 )
+
+
+@app.middleware("http")
+async def add_server_time_header(request: Request, call_next):
+    """Stamp every response with the server's clock.
+
+    Relative times ("Active 2m ago") are computed in the BROWSER from
+    server timestamps; whenever the two clocks disagree — WSL2 clock drift
+    after host sleep was observed at 5.5 HOURS, any remote backend can
+    differ too — the UI shows nonsense like "Active 6h ago" on a
+    just-spawned session. The UI measures skew from this header and
+    corrects.
+    """
+    response = await call_next(request)
+    response.headers["X-Server-Time"] = datetime.now().isoformat()
+    return response
+
 
 app.add_middleware(
     CORSMiddleware,

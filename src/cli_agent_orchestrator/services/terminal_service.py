@@ -273,13 +273,25 @@ def reattach_surviving_terminals() -> int:
             # Re-create the provider from DB metadata, restart the FIFO
             # reader, and re-point pipe-pane at it (a pane has a single
             # pipe target, so this cleanly replaces the dead one).
-            provider_manager.get_provider(terminal_id)
+            provider = provider_manager.get_provider(terminal_id)
             fifo_manager.create_reader(terminal_id)
             backend.pipe_pane(
                 terminal["tmux_session"],
                 terminal["tmux_window"],
                 str(FIFO_DIR / f"{terminal_id}.fifo"),
             )
+            # Seed an initial status from the RENDERED pane: a finished/idle
+            # agent is silent, so the pipeline alone would leave it UNKNOWN
+            # until its next repaint (observed as "Unknown" cards after every
+            # server restart).
+            try:
+                content = backend.get_history(
+                    terminal["tmux_session"], terminal["tmux_window"], strip_escapes=True
+                )
+                if content and provider is not None:
+                    status_monitor.seed_status(terminal_id, provider.get_status(content))
+            except Exception as e:
+                logger.debug(f"Could not seed status for {terminal_id}: {e}")
             reattached += 1
             logger.info(
                 f"Re-attached surviving terminal {terminal_id} "

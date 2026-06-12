@@ -1,10 +1,23 @@
 const BASE = ''  // Vite proxy handles routing to backend
 
+// Server/browser clock skew (WSL2 drift was observed at 5.5 HOURS; remote
+// backends differ too). Measured from the X-Server-Time response header and
+// used wherever relative times are computed from server timestamps.
+let serverClockSkewMs = 0
+export function serverNow(): number {
+  return Date.now() + serverClockSkewMs
+}
+
 async function fetchJSON<T>(url: string, opts?: RequestInit & { timeoutMs?: number }): Promise<T> {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), opts?.timeoutMs ?? 10000)
   try {
     const res = await fetch(`${BASE}${url}`, { ...opts, signal: controller.signal })
+    const serverTime = res.headers?.get?.('X-Server-Time')
+    if (serverTime) {
+      const t = new Date(serverTime).getTime()
+      if (!isNaN(t)) serverClockSkewMs = t - Date.now()
+    }
     if (!res.ok) {
       // Surface the API's human-readable detail ("Folder does not exist: ...")
       // instead of an opaque "500 Internal Server Error".

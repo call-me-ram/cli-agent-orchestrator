@@ -112,16 +112,19 @@ def get_session(session_name: str) -> Dict:
         # native), so derive it here rather than persisting a stale column.
         from cli_agent_orchestrator.services.status_monitor import status_monitor
         from cli_agent_orchestrator.utils.agent_profiles import load_agent_profile
+        from cli_agent_orchestrator.utils.model_resolution import effective_model
 
         for terminal in terminals:
             terminal["status"] = status_monitor.get_status(terminal["id"]).value
-            # Surface which LLM the agent runs: the profile's pinned model,
-            # or None meaning the provider CLI's own configured default.
-            terminal["model"] = None
+            # Surface which LLM the agent ACTUALLY runs: the profile's pinned
+            # model, else the provider CLI's configured default ("is this
+            # worker burning Fable or Sonnet?" deserves a real answer).
+            pinned = None
             try:
-                terminal["model"] = load_agent_profile(terminal.get("agent_profile") or "").model
+                pinned = load_agent_profile(terminal.get("agent_profile") or "").model
             except Exception:
                 pass
+            terminal["model"] = effective_model(terminal.get("provider") or "", pinned)
         return {"session": session_data, "terminals": terminals}
 
     except Exception as e:
