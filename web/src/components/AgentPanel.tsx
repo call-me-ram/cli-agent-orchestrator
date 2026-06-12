@@ -25,7 +25,7 @@ export function AgentPanel() {
   const [provider, setProvider] = useState('kiro_cli')
   const [profile, setProfile] = useState('')
   const [creating, setCreating] = useState(false)
-  const [liveTerminal, setLiveTerminal] = useState<{ id: string; provider?: string; agentProfile?: string | null } | null>(null)
+  const [liveTerminal, setLiveTerminal] = useState<{ id: string; provider?: string; agentProfile?: string | null; model?: string | null } | null>(null)
   const [profiles, setProfiles] = useState<AgentProfileInfo[]>([])
   const [loadingProfiles, setLoadingProfiles] = useState(true)
   const [providers, setProviders] = useState<ProviderInfo[]>([])
@@ -140,8 +140,8 @@ export function AgentPanel() {
     setWorkingDirectory('')
   }
 
-  const openTerminal = (terminalId: string, provider?: string, agentProfile?: string | null) => {
-    setLiveTerminal({ id: terminalId, provider, agentProfile })
+  const openTerminal = (terminalId: string, provider?: string, agentProfile?: string | null, model?: string | null) => {
+    setLiveTerminal({ id: terminalId, provider, agentProfile, model })
   }
 
   // Fetch working directories for terminals in session detail
@@ -357,7 +357,7 @@ export function AgentPanel() {
                       Inbox
                     </button>
                     <button
-                      onClick={() => openTerminal(t.id, t.provider, t.agent_profile)}
+                      onClick={() => openTerminal(t.id, t.provider, t.agent_profile, t.model)}
                       className="flex items-center gap-2 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium rounded-lg transition-colors"
                       title="Open live terminal"
                     >
@@ -445,6 +445,7 @@ export function AgentPanel() {
           terminalId={liveTerminal.id}
           provider={liveTerminal.provider}
           agentProfile={liveTerminal.agentProfile}
+          model={liveTerminal.model}
           onClose={() => setLiveTerminal(null)}
         />
       )}

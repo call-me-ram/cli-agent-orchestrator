@@ -248,6 +248,50 @@ async def _maybe_isolate_in_worktree(
         return None
 
 
+def reattach_surviving_terminals() -> int:
+    """Re-attach the status pipeline to terminals that survived a server restart.
+
+    tmux sessions — and the agents running inside them — outlive cao-server,
+    but the FIFO readers, StatusMonitor state, and provider registrations are
+    per-process. Without this, every pre-restart terminal reads UNKNOWN
+    forever, inbox delivery for it never triggers, and a supervisor's
+    handoff wait can never see its worker finish (observed live). Called once
+    at startup; returns the number of terminals re-attached.
+    """
+    backend = get_backend()
+    if backend.supports_event_inbox():
+        return 0  # herdr terminals re-register via their own inbox socket path
+
+    reattached = 0
+    for terminal in list_all_terminals():
+        terminal_id = terminal["id"]
+        try:
+            if provider_manager.has_provider(terminal_id):
+                continue  # already live in this process
+            if not backend.session_exists(terminal["tmux_session"]):
+                continue  # agent gone; stale row, left for cleanup
+            # Re-create the provider from DB metadata, restart the FIFO
+            # reader, and re-point pipe-pane at it (a pane has a single
+            # pipe target, so this cleanly replaces the dead one).
+            provider_manager.get_provider(terminal_id)
+            fifo_manager.create_reader(terminal_id)
+            backend.pipe_pane(
+                terminal["tmux_session"],
+                terminal["tmux_window"],
+                str(FIFO_DIR / f"{terminal_id}.fifo"),
+            )
+            reattached += 1
+            logger.info(
+                f"Re-attached surviving terminal {terminal_id} "
+                f"({terminal['tmux_session']}:{terminal['tmux_window']})"
+            )
+        except Exception as e:
+            logger.warning(f"Could not re-attach terminal {terminal_id}: {e}")
+    if reattached:
+        logger.info(f"Re-attached {reattached} surviving terminal(s) after restart")
+    return reattached
+
+
 async def create_terminal(
     provider: str,
     agent_profile: str,

@@ -228,6 +228,11 @@ async def lifespan(app: FastAPI):
     inbox_service_task = asyncio.create_task(inbox_service.run(registry))
     logger.info("Event bus consumers started (StatusMonitor, LogWriter, InboxService)")
 
+    # Re-attach terminals that survived a restart (tmux outlives this
+    # process; without this they would read UNKNOWN forever). After the
+    # consumers above so their first chunks are actually processed.
+    asyncio.create_task(asyncio.to_thread(terminal_service.reattach_surviving_terminals))
+
     # Start temporary OpenCode inbox poller. GH #115 tracks replacing this
     # provider-specific wakeup path with a unified delivery engine.
     opencode_inbox_task = asyncio.create_task(opencode_inbox_delivery_daemon(registry))

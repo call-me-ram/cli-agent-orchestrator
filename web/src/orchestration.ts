@@ -12,6 +12,7 @@ export interface RunMember {
   terminalId: string
   profile: string
   provider: string
+  model: string | null // profile-pinned LLM, or null = provider CLI default
   isPlanner: boolean
   status: string // normalized upper-case terminal status (or 'UNKNOWN')
 }
@@ -74,6 +75,7 @@ export function deriveRun(
       terminalId: t.id,
       profile: t.agent_profile || t.provider,
       provider: t.provider,
+      model: t.model ?? null,
       isPlanner: isPlannerProfile(t.agent_profile),
       status: (statuses[t.id] || 'UNKNOWN').toUpperCase(),
     }))

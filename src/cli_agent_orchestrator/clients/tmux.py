@@ -233,6 +233,16 @@ class TmuxClient:
             logger.info(
                 f"Created tmux session: {session_name} with window: {window_name} in directory: {working_directory}"
             )
+            # Mouse mode: wheel-up enters copy-mode and scrolls pane history.
+            # Without it the web terminal (xterm.js over the WS attach) cannot
+            # scroll at all — agent TUIs redraw in place, so the history lives
+            # only in tmux's scrollback. xterm.js forwards wheel events once
+            # tmux requests mouse reporting, so this makes scrolling work in
+            # the dashboard and in any attached terminal alike.
+            try:
+                session.cmd("set-option", "mouse", "on")
+            except Exception as e:
+                logger.warning(f"Could not enable tmux mouse mode for {session_name}: {e}")
             window_name_result = session.windows[0].name
             if window_name_result is None:
                 raise ValueError(f"Window name is None for session {session_name}")

@@ -34,6 +34,9 @@ function MemberRow({ member, onAnswer, onShow }: {
           : 'bg-gray-500'
         }`} />
         <span className={`text-sm truncate ${tone}`}>{narrate(member)}</span>
+        <span className="text-xs text-gray-600 shrink-0" title="Provider and LLM model">
+          {member.provider} · {member.model || 'default model'}
+        </span>
       </div>
       <div className="flex items-center gap-1 shrink-0">
         {member.status === 'WAITING_USER_ANSWER' && (
