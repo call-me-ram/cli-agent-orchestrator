@@ -838,6 +838,24 @@ def send_input(
 
         update_last_active(terminal_id)
         logger.info(f"Sent input to terminal: {terminal_id}")
+        if sender_id:
+            # Agent-to-agent traffic (handoff/assign task delivery): announce
+            # it on the bus so the flow board can animate sender -> receiver.
+            from cli_agent_orchestrator.services.event_bus import bus as _bus
+
+            orchestration_value_for_flow = (
+                orchestration_type.value
+                if isinstance(orchestration_type, OrchestrationType)
+                else str(orchestration_type or "task")
+            )
+            _bus.publish(
+                "flow.message",
+                {
+                    "sender_id": sender_id,
+                    "receiver_id": terminal_id,
+                    "kind": orchestration_value_for_flow or "task",
+                },
+            )
         if registry is not None and sender_id is not None and orchestration_type is not None:
             dispatch_plugin_event(
                 registry,

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { api, TerminalMeta } from '../api'
 import { useStore } from '../store'
 import { deriveRun, narrate, PHASE_COPY, Run, RunMember } from '../orchestration'
+import { FlowPulse } from '../store'
 import { StartRunWizard } from './StartRunWizard'
 import { OutputViewer } from './OutputViewer'
 import { ConfirmModal } from './ConfirmModal'
@@ -10,6 +11,122 @@ import { Play, Trash2, MessageSquare, Eye, Send } from 'lucide-react'
 interface SessionTerminals {
   name: string
   terminals: TerminalMeta[]
+}
+
+const NODE_COLOR: Record<string, string> = {
+  PROCESSING: '#60a5fa',
+  WAITING_USER_ANSWER: '#fbbf24',
+  ERROR: '#f87171',
+  COMPLETED: '#c084fc',
+  IDLE: '#34d399',
+  UNKNOWN: '#6b7280',
+}
+
+const PULSE_COLOR: Record<string, string> = {
+  message: '#34d399', // worker reporting back
+  handoff: '#fbbf24', // planner delegating (blocking)
+  assign: '#fbbf24',  // planner delegating (parallel)
+  task: '#60a5fa',    // generic task delivery
+}
+
+/**
+ * The node-flow view: planner on the left, workers on the right, and an
+ * animated pulse traveling sender → receiver for every live message
+ * (handoff/assign out, send_message replies back). Pure SVG + SMIL — no
+ * graph library.
+ */
+function FlowGraph({ run, pulses, onShow }: {
+  run: Run
+  pulses: FlowPulse[]
+  onShow: (m: RunMember) => void
+}) {
+  const [, forceRender] = useState(0)
+  const planner = run.planner
+  const workers = run.workers
+  if (!planner || workers.length === 0) return null
+
+  const W = 480
+  const ROW = 56
+  const H = Math.max(workers.length * ROW, ROW) + 20
+  const plannerPos = { x: 86, y: H / 2 }
+  const workerPos = (i: number) => ({ x: W - 110, y: 10 + ROW / 2 + i * ROW })
+  const posOf = (tid: string) => {
+    if (tid === planner.terminalId) return plannerPos
+    const i = workers.findIndex(w => w.terminalId === tid)
+    return i >= 0 ? workerPos(i) : null
+  }
+
+  const FRESH_MS = 2600
+  const fresh = pulses.filter(p => Date.now() - p.ts < FRESH_MS && posOf(p.sender) && posOf(p.receiver))
+  // Re-render once the youngest pulse expires so frozen dots disappear.
+  useEffect(() => {
+    if (!fresh.length) return
+    const youngest = Math.max(...fresh.map(p => p.ts))
+    const timer = setTimeout(() => forceRender(x => x + 1), youngest + FRESH_MS + 100 - Date.now())
+    return () => clearTimeout(timer)
+  }, [fresh.map(p => p.id).join(',')])
+
+  const node = (m: RunMember, pos: { x: number; y: number }) => {
+    const busy = m.status === 'PROCESSING' || m.status === 'WAITING_USER_ANSWER'
+    return (
+      <g key={m.terminalId} onClick={() => onShow(m)} className="cursor-pointer" data-testid={`flow-node-${m.terminalId}`}>
+        <circle cx={pos.x} cy={pos.y} r={13} fill="#16161e" stroke={NODE_COLOR[m.status] || NODE_COLOR.UNKNOWN} strokeWidth={2.5}>
+          {busy && (
+            <animate attributeName="stroke-opacity" values="1;0.35;1" dur="1.6s" repeatCount="indefinite" />
+          )}
+        </circle>
+        <circle cx={pos.x} cy={pos.y} r={4.5} fill={NODE_COLOR[m.status] || NODE_COLOR.UNKNOWN} />
+        <text x={pos.x} y={pos.y + 28} textAnchor="middle" className="fill-gray-400" fontSize={10}>
+          {(m.isPlanner ? 'planner · ' : '') + m.profile.slice(0, 18)}
+        </text>
+      </g>
+    )
+  }
+
+  return (
+    <div className="mb-2 overflow-hidden" data-testid={`flow-graph-${run.runId}`}>
+      <svg viewBox={`0 0 ${W} ${H + 16}`} className="w-full" style={{ maxHeight: 200 }}>
+        {workers.map((w, i) => {
+          const wp = workerPos(i)
+          return (
+            <line
+              key={w.terminalId}
+              x1={plannerPos.x + 16} y1={plannerPos.y}
+              x2={wp.x - 16} y2={wp.y}
+              stroke="#2a2a36" strokeWidth={1.5}
+            />
+          )
+        })}
+        {node(planner, plannerPos)}
+        {workers.map((w, i) => node(w, workerPos(i)))}
+        {fresh.map(p => {
+          const from = posOf(p.sender)!
+          const to = posOf(p.receiver)!
+          const color = PULSE_COLOR[p.kind] || PULSE_COLOR.task
+          return (
+            <g key={p.id}>
+              <circle r={5} fill={color}>
+                <animateMotion
+                  dur="1.4s"
+                  fill="freeze"
+                  path={`M ${from.x} ${from.y} L ${to.x} ${to.y}`}
+                />
+                <animate attributeName="opacity" from="1" to="0" begin="1.2s" dur="0.4s" fill="freeze" />
+              </circle>
+              <circle r={9} fill="none" stroke={color} strokeOpacity={0.4}>
+                <animateMotion
+                  dur="1.4s"
+                  fill="freeze"
+                  path={`M ${from.x} ${from.y} L ${to.x} ${to.y}`}
+                />
+                <animate attributeName="opacity" from="0.6" to="0" begin="1.1s" dur="0.4s" fill="freeze" />
+              </circle>
+            </g>
+          )
+        })}
+      </svg>
+    </div>
+  )
 }
 
 function MemberRow({ member, onAnswer, onShow }: {
@@ -61,8 +178,9 @@ function MemberRow({ member, onAnswer, onShow }: {
   )
 }
 
-function RunCard({ run, onDelete, onAnswer, onShow, onInstruct }: {
+function RunCard({ run, pulses, onDelete, onAnswer, onShow, onInstruct }: {
   run: Run
+  pulses: FlowPulse[]
   onDelete: (runId: string) => void
   onAnswer: (m: RunMember) => void
   onShow: (m: RunMember) => void
@@ -98,6 +216,7 @@ function RunCard({ run, onDelete, onAnswer, onShow, onInstruct }: {
           </button>
         </div>
       </div>
+      <FlowGraph run={run} pulses={pulses} onShow={onShow} />
       <div className="divide-y divide-gray-800/60">
         {run.planner && <MemberRow member={run.planner} onAnswer={onAnswer} onShow={onShow} />}
         {run.workers.map(w => (
@@ -117,7 +236,7 @@ function RunCard({ run, onDelete, onAnswer, onShow, onInstruct }: {
  * session/terminal membership reconciles on a slow fetch.
  */
 export function RunBoard() {
-  const { sessions, terminalStatuses, deleteSession, showSnackbar, setTerminalStatus } = useStore()
+  const { sessions, terminalStatuses, deleteSession, showSnackbar, setTerminalStatus, flowPulses } = useStore()
   const [details, setDetails] = useState<SessionTerminals[]>([])
   const [wizardOpen, setWizardOpen] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
@@ -238,6 +357,7 @@ export function RunBoard() {
             <RunCard
               key={run.runId}
               run={run}
+              pulses={flowPulses}
               onDelete={id => setConfirmDelete(id)}
               onAnswer={setAnswering}
               onShow={setViewing}
@@ -255,6 +375,7 @@ export function RunBoard() {
               <RunCard
                 key={run.runId}
                 run={run}
+                pulses={flowPulses}
                 onDelete={id => setConfirmDelete(id)}
                 onAnswer={setAnswering}
                 onShow={setViewing}

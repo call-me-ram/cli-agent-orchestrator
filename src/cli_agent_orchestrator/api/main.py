@@ -979,28 +979,50 @@ async def wait_terminal_status(
 
 
 async def _status_event_stream():
-    """Yield one SSE ``status`` event per published terminal status change.
+    """Yield SSE events for terminal status changes and agent-to-agent flow.
+
+    ``status`` frames carry per-terminal transitions; ``flow`` frames carry
+    sender->receiver message announcements (handoff/assign deliveries and
+    inbox sends) that the flow board animates.
 
     The ``finally`` unsubscribe is mandatory: without it a disconnected client
-    leaves a dead queue that the dispatcher keeps filling until QueueFull spam.
+    leaves dead queues that the dispatcher keeps filling until QueueFull spam.
     sse-starlette cancels this generator when the client goes away, which
     routes through the ``finally``.
     """
-    queue = bus.subscribe("terminal.*.status")
+    status_queue = bus.subscribe("terminal.*.status")
+    flow_queue = bus.subscribe("flow.message")
+    merged: asyncio.Queue = asyncio.Queue(maxsize=2048)
+
+    async def _pump(queue: asyncio.Queue, kind: str) -> None:
+        while True:
+            item = await queue.get()
+            await merged.put((kind, item))
+
+    pumps = [
+        asyncio.create_task(_pump(status_queue, "status")),
+        asyncio.create_task(_pump(flow_queue, "flow")),
+    ]
     try:
         while True:
-            event = await queue.get()
-            yield {
-                "event": "status",
-                "data": json.dumps(
-                    {
-                        "terminal_id": terminal_id_from_topic(event["topic"]),
-                        "status": event["data"].get("status"),
-                    }
-                ),
-            }
+            kind, event = await merged.get()
+            if kind == "status":
+                yield {
+                    "event": "status",
+                    "data": json.dumps(
+                        {
+                            "terminal_id": terminal_id_from_topic(event["topic"]),
+                            "status": event["data"].get("status"),
+                        }
+                    ),
+                }
+            else:
+                yield {"event": "flow", "data": json.dumps(event["data"])}
     finally:
-        bus.unsubscribe("terminal.*.status", queue)
+        for pump in pumps:
+            pump.cancel()
+        bus.unsubscribe("terminal.*.status", status_queue)
+        bus.unsubscribe("flow.message", flow_queue)
 
 
 @app.get("/events")
@@ -1094,6 +1116,13 @@ async def create_inbox_message_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to create inbox message: {str(e)}",
         )
+
+    # Announce the agent-to-agent send for the flow board (worker ->
+    # supervisor replies travel through the inbox).
+    bus.publish(
+        "flow.message",
+        {"sender_id": sender_id, "receiver_id": receiver_id, "kind": "message"},
+    )
 
     # Attempt immediate delivery if terminal is already IDLE.
     # If not, InboxService will deliver on next IDLE status event.

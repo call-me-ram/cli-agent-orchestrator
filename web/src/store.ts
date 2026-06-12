@@ -11,6 +11,14 @@ interface Snackbar {
   message: string
 }
 
+export interface FlowPulse {
+  id: number
+  sender: string
+  receiver: string
+  kind: string // 'handoff' | 'assign' | 'message' | 'task'
+  ts: number
+}
+
 interface Store {
   sessions: Session[]
   activeSession: string | null
@@ -18,6 +26,7 @@ interface Store {
   connected: boolean
   snackbar: Snackbar | null
   terminalStatuses: Record<string, string>
+  flowPulses: FlowPulse[]
 
   fetchSessions: () => Promise<void>
   selectSession: (name: string | null) => Promise<void>
@@ -29,7 +38,10 @@ interface Store {
   setTerminalStatus: (id: string, status: string) => void
   clearTerminalStatuses: (ids: string[]) => void
   connectStatusStream: () => EventSource
+  pushFlowPulse: (pulse: Omit<FlowPulse, 'id' | 'ts'>) => void
 }
+
+let pulseSeq = 0
 
 export const useStore = create<Store>((set, get) => ({
   sessions: [],
@@ -38,6 +50,7 @@ export const useStore = create<Store>((set, get) => ({
   connected: false,
   snackbar: null,
   terminalStatuses: {},
+  flowPulses: [],
 
   fetchSessions: async () => {
     try {
@@ -113,9 +126,29 @@ export const useStore = create<Store>((set, get) => ({
         // Malformed frame — ignore; REST refresh remains the safety net.
       }
     })
+    es.addEventListener('flow', (e: MessageEvent) => {
+      try {
+        const { sender_id, receiver_id, kind } = JSON.parse(e.data)
+        if (sender_id && receiver_id) {
+          get().pushFlowPulse({ sender: sender_id, receiver: receiver_id, kind: kind || 'message' })
+          // A flow event often means the roster just changed (a handoff
+          // spawned a worker) — refresh sooner than the slow reconcile.
+          get().fetchSessions()
+        }
+      } catch {
+        // Malformed frame — ignore.
+      }
+    })
     es.onopen = () => get().setConnected(true)
     return es
   },
+  pushFlowPulse: (pulse) =>
+    set(state => ({
+      flowPulses: [
+        ...state.flowPulses.filter(p => Date.now() - p.ts < 30_000),
+        { ...pulse, id: ++pulseSeq, ts: Date.now() },
+      ],
+    })),
   setTerminalStatus: (id, status) =>
     set(state => {
       const normalized = status ? status.toUpperCase() : status

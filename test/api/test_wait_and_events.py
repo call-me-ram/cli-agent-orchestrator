@@ -167,3 +167,62 @@ class TestStatusEventsSSE:
         with pytest.raises(HTTPException) as exc:
             await status_events(request)
         assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+class TestFlowEventsSSE:
+    async def test_flow_frames_relayed(self):
+        """flow.message publishes surface as 'flow' SSE frames for the board."""
+        from cli_agent_orchestrator.api.main import _status_event_stream
+
+        stream = _status_event_stream()
+        try:
+            reader = asyncio.create_task(anext(stream))
+            await asyncio.sleep(0.05)  # let the generator subscribe
+            bus._dispatch(
+                "flow.message",
+                {"sender_id": "aaaa1111", "receiver_id": "bbbb2222", "kind": "handoff"},
+            )
+            event = await asyncio.wait_for(reader, timeout=3.0)
+        finally:
+            await stream.aclose()
+
+        assert event["event"] == "flow"
+        assert json.loads(event["data"]) == {
+            "sender_id": "aaaa1111",
+            "receiver_id": "bbbb2222",
+            "kind": "handoff",
+        }
+
+    async def test_status_frames_still_relayed_through_multiplexer(self):
+        from cli_agent_orchestrator.api.main import _status_event_stream
+
+        stream = _status_event_stream()
+        try:
+            reader = asyncio.create_task(anext(stream))
+            await asyncio.sleep(0.05)
+            bus._dispatch(TOPIC, {"status": "processing"})
+            event = await asyncio.wait_for(reader, timeout=3.0)
+        finally:
+            await stream.aclose()
+
+        assert event["event"] == "status"
+        assert json.loads(event["data"]) == {"terminal_id": TERMINAL_ID, "status": "processing"}
+
+    async def test_multiplexer_cleans_up_both_subscriptions(self):
+        from cli_agent_orchestrator.api.main import _status_event_stream
+
+        wildcard_before = len(bus._wildcard)
+        exact_before = len(bus._exact.get("flow.message", []))
+        stream = _status_event_stream()
+        reader = asyncio.create_task(anext(stream))
+        await asyncio.sleep(0.05)
+        reader.cancel()
+        try:
+            await reader
+        except asyncio.CancelledError:
+            pass
+        await stream.aclose()
+        await asyncio.sleep(0.05)
+        assert len(bus._wildcard) == wildcard_before
+        assert len(bus._exact.get("flow.message", [])) == exact_before
