@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
-import { X, Terminal as TermIcon } from 'lucide-react'
+import { X, Maximize2, Terminal as TermIcon } from 'lucide-react'
 
 interface TerminalViewProps {
   model?: string | null
@@ -136,13 +136,13 @@ export function TerminalView({ terminalId, provider, agentProfile, model, inline
           {agentProfile && <span className="text-xs text-emerald-400 bg-emerald-900/30 px-2 py-0.5 rounded">{agentProfile}</span>}
         </div>
         <div className="flex items-center gap-3">
-          <span className="text-[10px] text-gray-600">Click X to close</span>
+          <span className="text-[10px] text-gray-600">{inline ? 'Open full screen' : 'Click X to close'}</span>
           <button
             onClick={onClose}
             className="p-1 text-gray-500 hover:text-white transition-colors rounded"
-            title="Close terminal"
+            title={inline ? 'Open this terminal full screen' : 'Close terminal'}
           >
-            <X size={18} />
+            {inline ? <Maximize2 size={16} /> : <X size={18} />}
           </button>
         </div>
       </div>

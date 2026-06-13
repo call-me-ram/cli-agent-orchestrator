@@ -36,7 +36,7 @@ function fmtAbs(dateStr: string | null | undefined): string | null {
 const STATUS_META: Record<string, { label: string; dot: string; text: string; pulse?: boolean }> = Object.fromEntries(
   Object.entries(STATUS_CONFIG).map(([k, v]) => [k, { label: v.label, dot: v.dotClass, text: v.textClass, pulse: v.pulse }])
 )
-STATUS_META['UNKNOWN'] = { label: 'Unknown', dot: 'bg-gray-500', text: 'text-gray-500' }
+STATUS_META['UNKNOWN'] = { label: 'UNKNOWN', dot: 'bg-gray-500', text: 'text-gray-500' }
 
 const STATUS_ACTIVE_BG: Record<string, string> = {
   PROCESSING: 'bg-blue-900/40 border-blue-500/50 text-blue-300',
